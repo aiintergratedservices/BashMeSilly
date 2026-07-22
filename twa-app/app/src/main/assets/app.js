@@ -85,6 +85,17 @@
              flags: { "-l": "listen mode", "-v": "verbose", "-n": "no DNS", "-p": "port" } },
     whatweb:{ sum: "Fingerprints a website: server, CMS, frameworks, versions.",
              usage: "whatweb <url>", cat: "recon", flags: {} },
+    searchsploit:{ sum: "Search the local Exploit-DB copy for public exploits by product/version.",
+             usage: "searchsploit <product version>", cat: "exploit", flags: {} },
+    smbclient:{ sum: "Connect to / list Windows/Samba (SMB) file shares.",
+             usage: "smbclient -L <host>", cat: "recon",
+             flags: { "-L": "list available shares", "-N": "no password (null session)" } },
+    enum4linux:{ sum: "Enumerate SMB: shares, users, groups, OS info — great for null sessions.",
+             usage: "enum4linux <host>", cat: "recon", flags: {} },
+    ftp:   { sum: "Connect to an FTP server (check for anonymous login + risky versions).",
+             usage: "ftp <host>", cat: "recon", flags: {} },
+    john:  { sum: "John the Ripper: offline password-hash cracker (CPU-based).",
+             usage: "john --wordlist=<list> <hashfile>", cat: "access", flags: {} },
     scope: { sum: "Show the rules of engagement — who/what you're allowed to test.",
              usage: "scope", cat: "ethics", flags: {} }
   };
@@ -211,10 +222,13 @@
       case "nmap": doNmap(args); break;
       case "nikto": case "whatweb": case "gobuster": case "sqlmap":
         doWebTool(cmd, args); break;
-      case "msfconsole": case "hydra": case "hashcat": case "nc":
-        out(cmd + ": this is a learning sandbox — real exploitation runs in Kali/Termux, not here.", "sys");
-        out("Type 'explain " + cmd + "' or 'man " + cmd + "' to learn what it does and how to use it.", "sys");
-        break;
+      case "searchsploit": doSearchsploit(args); break;
+      case "hydra": doHydra(args); break;
+      case "smbclient": case "enum4linux": doSmb(cmd, args); break;
+      case "nc": case "netcat": doNc(args); break;
+      case "ftp": doFtp(args); break;
+      case "hashcat": case "john": doCrack(cmd, args); break;
+      case "msfconsole": case "msf": doMsf(args); break;
       case "exit": out("Nothing to exit here. (Inside a lesson, exit quits it.)", "sys"); break;
       default:
         out(cmd + ": command not found. Type 'help' to see what's available.", "err");
@@ -295,6 +309,20 @@
     // single-host scan
     var host = LAB[target];
     if (!host) { out("Note: host down / not in the lab. Live hosts: run nmap -sn " + LAB_NET, "err"); return; }
+    if (args.indexOf("vuln") !== -1 || flags.indexOf("--script") !== -1) {
+      out("Nmap scan report for " + host.name + " (" + target + ")  [NSE: vuln]", "sys");
+      var V = {
+        "192.168.56.10":  ["80/tcp   http: CVE-2021-XXXX possible; outdated Apache 2.4.41",
+                            "3000/tcp Juice Shop: multiple OWASP issues (SQLi, XSS, broken access control)"],
+        "192.168.56.20":  ["445/tcp  smb-vuln: null session allowed; SMB signing not required"],
+        "192.168.56.101": ["21/tcp   ftp-vuln: vsftpd 2.3.4 BACKDOOR (CVE-2011-2523) — instant root shell",
+                            "3306/tcp mysql: default/weak credentials likely",
+                            "80/tcp   http: DVWA present (deliberately vulnerable)"]
+      };
+      (V[target] || ["No high-signal script findings on this host."]).forEach(function (l) { out("| " + l, "ok"); });
+      out("Version + vuln info feeds the next phase: searchsploit / msfconsole.", "sys");
+      return;
+    }
     var allPorts = flags.indexOf("-p-") !== -1;
     var showVer = flags.indexOf("-sV") !== -1 || flags.indexOf("-A") !== -1;
     out("Nmap scan report for " + host.name + " (" + target + ")");
@@ -329,6 +357,95 @@
       out("[+] parameter 'q' is vulnerable (boolean-based blind).  In a real lab: --dbs to dump.", "ok");
     }
     out("(Simulated result — run the real tool from Kali against your own target.)", "sys");
+  }
+
+  function labGate(tool, target) {
+    if (inLab(target)) return true;
+    out(tool + ": sandbox only models the practice lab (" + LAB_NET + ").", "err");
+    out("Only test systems you own or are authorized to test. Try a 192.168.56.x lab host.", "sys");
+    return false;
+  }
+
+  function doSearchsploit(args) {
+    var q = args.join(" ").toLowerCase();
+    if (!q) { out("Usage: searchsploit <product version>   e.g. searchsploit vsftpd 2.3.4", "err"); return; }
+    out("--------------------------------------------  ----------------------------", "sys");
+    out(" Exploit Title                                | Path");
+    out("--------------------------------------------  ----------------------------", "sys");
+    if (/vsftpd/.test(q)) {
+      out(" vsftpd 2.3.4 - Backdoor Command Execution    | unix/remote/17491.rb", "ok");
+      out("Match! This maps to a Metasploit module. Next: msfconsole → search vsftpd.", "ok");
+    } else if (/samba|smb/.test(q)) {
+      out(" Samba 3.x - 'Username map script' RCE        | unix/remote/16320.rb", "ok");
+    } else if (/apache/.test(q)) {
+      out(" Apache 2.4.x - various (context dependent)   | multiple/...");
+    } else {
+      out(" (no exact match — try the exact product + version string)");
+    }
+    out("(Simulated Exploit-DB — verify real results with the actual searchsploit in Kali.)", "sys");
+  }
+
+  function doHydra(args) {
+    var target = null, svc = "ssh";
+    args.forEach(function (a) { if (/^192\.168\.56\./.test(a)) target = a; if (/^(ssh|ftp|http)/.test(a)) svc = a; });
+    if (!labGate("hydra", target)) return;
+    out("Hydra starting (simulated) — brute-forcing " + svc + " on " + target + " ...", "sys");
+    out("[ATTEMPT] target " + target + " - login \"admin\" - pass \"123456\"");
+    out("[ATTEMPT] target " + target + " - login \"admin\" - pass \"password\"");
+    out("[" + (svc === "ssh" ? "22" : "21") + "][" + svc + "] host: " + target + "   login: msfadmin   password: msfadmin", "ok");
+    out("1 valid password found. Weak/default creds = game over.", "ok");
+    out("🛡️ Defense: enforce MFA, lockouts + rate-limiting, and ban weak/default passwords.", "sys");
+  }
+
+  function doSmb(tool, args) {
+    var target = args.filter(function (a) { return /^192\.168\.56\./.test(a); })[0];
+    if (!labGate(tool, target)) return;
+    out("Enumerating SMB on " + target + " (simulated) ...", "sys");
+    out("  Sharename       Type      Comment");
+    out("  ---------       ----      -------");
+    out("  print$          Disk      Printer Drivers");
+    out("  tmp             Disk      oh noes!   (world-readable)", "ok");
+    out("  IPC$            IPC       IPC Service");
+    out("[+] Null session allowed — anonymous access to 'tmp'.", "ok");
+    out("🛡️ Defense: disable null sessions, require SMB signing, restrict share permissions.", "sys");
+  }
+
+  function doNc(args) {
+    var target = args.filter(function (a) { return /^192\.168\.56\./.test(a); })[0];
+    var port = args.filter(function (a) { return /^\d+$/.test(a); })[0] || "80";
+    if (!labGate("nc", target)) return;
+    out("Connecting to " + target + ":" + port + " (simulated banner grab) ...", "sys");
+    var banners = { "21": "220 (vsFTPd 2.3.4)", "22": "SSH-2.0-OpenSSH_7.6p1", "80": "HTTP/1.1 200 OK  Server: Apache/2.4.41", "3306": "5.0.51a-3ubuntu5 (MySQL)" };
+    out(banners[port] || "(no banner / closed)", "ok");
+    out("Banner = free version intel → feed it to searchsploit.", "sys");
+  }
+
+  function doFtp(args) {
+    var target = args.filter(function (a) { return /^192\.168\.56\./.test(a); })[0];
+    if (!labGate("ftp", target)) return;
+    out("Connected to " + target + ".  220 (vsFTPd 2.3.4)", "sys");
+    out("Name: anonymous   Password: (blank)");
+    out("230 Login successful.   ← anonymous FTP is enabled", "ok");
+    if (target === "192.168.56.101") out("⚠ vsFTPd 2.3.4 is the BACKDOORED build (CVE-2011-2523). searchsploit vsftpd 2.3.4", "ok");
+    out("🛡️ Defense: disable anonymous FTP, patch/replace vulnerable versions, prefer SFTP.", "sys");
+  }
+
+  function doCrack(tool, args) {
+    out(tool + " starting (simulated) ...", "sys");
+    out("Loaded 1 hash (md5).  Wordlist: rockyou.txt", "sys");
+    out("5f4dcc3b5aa765d61d8327deb882cf99 : password", "ok");
+    out("Cracked! MD5 is unsalted and instant to crack.", "ok");
+    out("🛡️ Defense: never store MD5/SHA1 for passwords — use salted bcrypt/argon2.", "sys");
+  }
+
+  function doMsf(args) {
+    out("Metasploit is interactive — here's the flow you'd run in your Kali box:", "sys");
+    out("  msf6 > search vsftpd 2.3.4");
+    out("  msf6 > use exploit/unix/ftp/vsftpd_234_backdoor");
+    out("  msf6 > set RHOSTS 192.168.56.101");
+    out("  msf6 > exploit");
+    out("[*] (in a real lab) Command shell session 1 opened — you have root.", "ok");
+    out("🛡️ Defense: patch the CVE, EDR to catch payloads, egress filtering to block the shell.", "sys");
   }
 
   /* ---------- Individual commands ---------- */
@@ -447,10 +564,14 @@
     out("Security / pentest (simulated lab, offline):", "sys");
     out("  pentest          the attack methodology, top to bottom");
     out("  scope            the rules of engagement (read first!)");
-    out("  nmap -sn 192.168.56.0/24    discover hosts in the practice lab");
-    out("  nmap -sV <ip>    scan a lab host's services");
-    out("  whatweb/nikto/gobuster/sqlmap <ip>   web recon on the lab target");
-    out("  (Learn tab has the guided Pentest lessons + in-depth Field Guide)");
+    out("  nmap -sn 192.168.56.0/24     discover lab hosts");
+    out("  nmap -sV / -p- / --script vuln <ip>   scan & find weaknesses");
+    out("  whatweb/nikto/gobuster/sqlmap <ip>    web recon & injection");
+    out("  nc <ip> <port>   banner grab      ftp <ip>   anonymous FTP");
+    out("  enum4linux/smbclient <ip>   SMB      hydra <ip> ssh   brute force");
+    out("  searchsploit <product>   find exploits    msfconsole   exploit flow");
+    out("  hashcat/john <hashes>    crack password hashes");
+    out("  (Learn tab: 14 guided Pentest lessons + the in-depth Field Guide)");
     out("Real device (needs Termux):", "sys");
     out("  termux <cmd>     run a real command in Termux");
     out("  wakelock on|off  keep the CPU awake for servers");
@@ -501,6 +622,47 @@
       { say: "Test the search parameter for SQL injection: <b>sqlmap 192.168.56.10</b>", ok: function (c) { return /^sqlmap\s+192\.168\.56\.10/.test(c); }, hint: "Type: sqlmap 192.168.56.10" },
       { say: "Confirmed vulnerable. In your real Kali lab you'd exploit it. First, re-read the limits: type <b>scope</b>.", ok: function (c) { return c === "scope"; }, hint: "Type: scope" },
       { say: "Now read the in-depth Field Guide below (tap a chapter) to learn HOW each attack works and how to STOP it.", ok: function (c) { return c === "learn" || c === "guide"; }, hint: "Type: learn" }
+    ]},
+    { id: "pt-vuln", title: "Pentest 5 · Vulnerability scanning", steps: [
+      { say: "Run nmap's vuln scripts against the old box: <b>nmap --script vuln 192.168.56.101</b>", ok: function (c) { return /^nmap/.test(c) && /vuln/.test(c) && /56\.101/.test(c); }, hint: "Type: nmap --script vuln 192.168.56.101" },
+      { say: "See that backdoored <b>vsftpd 2.3.4</b>? That's your way in. Confirm the version: <b>nmap -sV 192.168.56.101</b>", ok: function (c) { return /^nmap\s+-sV\s+192\.168\.56\.101/.test(c); }, hint: "Type: nmap -sV 192.168.56.101" }
+    ]},
+    { id: "pt-banner", title: "Pentest 6 · Banner grabbing with netcat", steps: [
+      { say: "Grab the FTP banner by hand: <b>nc 192.168.56.101 21</b>", ok: function (c) { return /^nc\s+192\.168\.56\.101\s+21/.test(c); }, hint: "Type: nc 192.168.56.101 21" },
+      { say: "Now the SSH banner: <b>nc 192.168.56.20 22</b>", ok: function (c) { return /^nc\s+192\.168\.56\.20\s+22/.test(c); }, hint: "Type: nc 192.168.56.20 22" }
+    ]},
+    { id: "pt-smb", title: "Pentest 7 · SMB enumeration", steps: [
+      { say: "Enumerate SMB shares on the file box: <b>enum4linux 192.168.56.20</b>", ok: function (c) { return /^enum4linux\s+192\.168\.56\.20/.test(c); }, hint: "Type: enum4linux 192.168.56.20" },
+      { say: "List the shares directly too: <b>smbclient -L 192.168.56.20</b>", ok: function (c) { return /^smbclient/.test(c) && /56\.20/.test(c); }, hint: "Type: smbclient -L 192.168.56.20" }
+    ]},
+    { id: "pt-brute", title: "Pentest 8 · Password brute-forcing", steps: [
+      { say: "Brute-force SSH on the file box: <b>hydra 192.168.56.20 ssh</b>", ok: function (c) { return /^hydra/.test(c) && /56\.20/.test(c); }, hint: "Type: hydra 192.168.56.20 ssh" },
+      { say: "You found weak creds. Note WHY it worked — then re-read the rules: <b>scope</b>", ok: function (c) { return c === "scope"; }, hint: "Type: scope" }
+    ]},
+    { id: "pt-ftp", title: "Pentest 9 · Anonymous FTP & risky versions", steps: [
+      { say: "Connect to FTP on the old box: <b>ftp 192.168.56.101</b>", ok: function (c) { return /^ftp\s+192\.168\.56\.101/.test(c); }, hint: "Type: ftp 192.168.56.101" },
+      { say: "Anonymous login + a backdoored version! Find the exploit: <b>searchsploit vsftpd 2.3.4</b>", ok: function (c) { return /^searchsploit/.test(c) && /vsftpd/.test(c); }, hint: "Type: searchsploit vsftpd 2.3.4" }
+    ]},
+    { id: "pt-exploit2", title: "Pentest 10 · Exploit with Metasploit", steps: [
+      { say: "You have a matching exploit. Walk the Metasploit flow: type <b>msfconsole</b>", ok: function (c) { return /^msf/.test(c); }, hint: "Type: msfconsole" },
+      { say: "That's initial access. Study how you'd DETECT it — open the Field Guide: <b>learn</b>", ok: function (c) { return c === "learn"; }, hint: "Type: learn" }
+    ]},
+    { id: "pt-crack", title: "Pentest 11 · Cracking password hashes", steps: [
+      { say: "You looted a password hash. Crack it offline: <b>hashcat -m 0 hashes.txt rockyou.txt</b>", ok: function (c) { return /^hashcat/.test(c); }, hint: "Type: hashcat -m 0 hashes.txt rockyou.txt" },
+      { say: "Instant — because it was unsalted MD5. Try John too: <b>john hashes.txt</b>", ok: function (c) { return /^john/.test(c); }, hint: "Type: john hashes.txt" }
+    ]},
+    { id: "pt-web2", title: "Pentest 12 · Web app deep dive", steps: [
+      { say: "Fingerprint the web target: <b>whatweb 192.168.56.10</b>", ok: function (c) { return /^whatweb\s+192\.168\.56\.10/.test(c); }, hint: "Type: whatweb 192.168.56.10" },
+      { say: "Brute-force hidden paths: <b>gobuster dir -u 192.168.56.10</b>", ok: function (c) { return /^gobuster/.test(c); }, hint: "Type: gobuster dir -u 192.168.56.10" },
+      { say: "Test for SQL injection: <b>sqlmap 192.168.56.10</b>", ok: function (c) { return /^sqlmap\s+192\.168\.56\.10/.test(c); }, hint: "Type: sqlmap 192.168.56.10" }
+    ]},
+    { id: "pt-blue", title: "Pentest 13 · Blue team — detect it", steps: [
+      { say: "Every attack above leaves traces. Open the Field Guide to chapter 8: type <b>learn</b>", ok: function (c) { return c === "learn"; }, hint: "Type: learn" },
+      { say: "Read '8 · Blue Team: Detection & Response', then come back. Type <b>pentest</b> to review the whole chain.", ok: function (c) { return c === "pentest" || c === "security"; }, hint: "Type: pentest" }
+    ]},
+    { id: "pt-report", title: "Pentest 14 · Report & remediate", steps: [
+      { say: "A finding isn't done until it's written up. Open the guide: <b>learn</b> and read '9 · Reporting'.", ok: function (c) { return c === "learn"; }, hint: "Type: learn" },
+      { say: "Final check — confirm you stayed in scope the whole time: <b>scope</b>", ok: function (c) { return c === "scope"; }, hint: "Type: scope" }
     ]}
   ];
   var lesson = { active: false, l: null, step: 0 };
@@ -777,9 +939,11 @@
   function explainMode() { return document.getElementById("explainToggle").checked; }
 
   /* ---------- Command chips ---------- */
-  var CHIPS = ["help", "ls", "pwd", "cat notes.txt", "tree", "learn",
-    "pentest", "scope", "nmap -sn 192.168.56.0/24", "nmap -sV 192.168.56.10",
-    "whatweb 192.168.56.10", "clear"];
+  var CHIPS = ["help", "learn", "pentest", "scope",
+    "nmap -sn 192.168.56.0/24", "nmap -sV 192.168.56.10", "nmap --script vuln 192.168.56.101",
+    "whatweb 192.168.56.10", "gobuster dir -u 192.168.56.10", "sqlmap 192.168.56.10",
+    "enum4linux 192.168.56.20", "hydra 192.168.56.20 ssh", "ftp 192.168.56.101",
+    "searchsploit vsftpd 2.3.4", "msfconsole", "clear"];
   function renderChips() {
     var box = document.getElementById("chips");
     CHIPS.forEach(function (c) {
