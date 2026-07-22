@@ -1,0 +1,96 @@
+<div id="app">
+  <header>
+    <span class="logo">&gt;_</span>
+    <div class="title">Terminalapi
+      <small>learn bash &middot; run servers via Termux</small>
+    </div>
+    <button id="wakePill" class="wake-pill" type="button">
+      <span class="dot"></span><span id="wakeLabel">Wakelock</span>
+    </button>
+  </header>
+
+  <main>
+    <!-- ============ TERMINAL ============ -->
+    <section class="view active" id="view-terminal">
+      <div id="screen" aria-live="polite"></div>
+
+      <div class="explain-toggle">
+        <label class="switch">
+          <input type="checkbox" id="explainToggle">
+          <span class="slider"></span>
+        </label>
+        <span>Explain mode &mdash; describe every command as I run it</span>
+      </div>
+
+      <div class="chips" id="chips"></div>
+
+      <div class="inputrow">
+        <span class="prompt">$</span>
+        <input id="cmdInput" type="text" autocomplete="off" autocapitalize="off"
+               autocorrect="off" spellcheck="false" placeholder="type a command, or 'help'">
+        <button class="iconbtn" id="runBtn" type="button">Run</button>
+      </div>
+    </section>
+
+    <!-- ============ LEARN ============ -->
+    <section class="view" id="view-learn">
+      <div class="pad">
+        <div class="banner ok">Tap a lesson to start. It runs inside the Terminal tab and
+          checks each command you type. You can quit anytime by typing <kbd>exit</kbd>.</div>
+        <div class="section-title">Guided lessons</div>
+        <div id="lessonList"></div>
+      </div>
+    </section>
+
+    <!-- ============ SERVERS ============ -->
+    <section class="view" id="view-servers">
+      <div class="pad">
+        <div id="termuxBanner"></div>
+
+        <div class="card">
+          <h3>Keep the CPU awake</h3>
+          <p>Turn this on before launching a server so Android doesn't sleep the CPU
+             with the screen off.</p>
+          <div class="btnrow">
+            <button class="btn primary" id="wakeOnBtn" type="button">Wakelock ON</button>
+            <button class="btn" id="wakeOffBtn" type="button">Wakelock OFF</button>
+            <button class="btn accent" id="termuxWakeBtn" type="button">termux-wake-lock</button>
+          </div>
+        </div>
+
+        <div class="section-title">Your project servers</div>
+        <div id="serverList"></div>
+
+        <div class="card">
+          <h3>Add a server</h3>
+          <div class="field">
+            <label>Name</label>
+            <input id="srvName" type="text" placeholder="My Vite app">
+          </div>
+          <div class="field">
+            <label>Command (runs in Termux via bash -c)</label>
+            <textarea id="srvCmd" placeholder="cd ~/myproject && npm run dev -- --host"></textarea>
+          </div>
+          <div class="btnrow">
+            <button class="btn primary" id="srvAddBtn" type="button">Save server</button>
+            <button class="btn" id="srvPresetBtn" type="button">Load a preset</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ HELP ============ -->
+    <section class="view" id="view-help">
+      <div class="pad" id="helpBody"></div>
+    </section>
+  </main>
+
+  <nav>
+    <button data-view="terminal" class="active" type="button"><span class="ico">&gt;_</span>Terminal</button>
+    <button data-view="learn" type="button"><span class="ico">&#9673;</span>Learn</button>
+    <button data-view="servers" type="button"><span class="ico">&#9881;</span>Servers</button>
+    <button data-view="help" type="button"><span class="ico">?</span>Help</button>
+  </nav>
+</div>
+
+<script src="app.js"></script>
