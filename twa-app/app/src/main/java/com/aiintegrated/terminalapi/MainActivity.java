@@ -51,6 +51,8 @@ public class MainActivity extends Activity {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
+        // Assets ship inside the APK; never serve a stale cached copy after an update.
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
         // Everything is bundled/served via the asset loader; no filesystem or
         // remote content is ever loaded.
         settings.setAllowFileAccess(false);
