@@ -140,6 +140,20 @@ main { flex: 1; overflow: hidden; position: relative; }
 }
 .card h3 { margin: 0 0 4px; font-size: 15px; }
 .card p { margin: 4px 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.guide-body { font-size: 13px; color: var(--fg); line-height: 1.6; margin-top: 8px; }
+.guide-body p { margin: 8px 0; color: var(--fg); }
+.guide-body ul { margin: 8px 0; padding-left: 18px; }
+.guide-body li { margin: 5px 0; color: var(--muted); }
+.guide-body li b { color: var(--fg); }
+.guide-body code {
+  font-family: var(--mono); font-size: 12px; color: var(--cyan);
+  background: var(--bg-input); padding: 1px 5px; border-radius: 4px; word-break: break-word;
+}
+.guide-body .gtag {
+  display: block; background: rgba(59,232,107,0.10); border-left: 3px solid var(--green-dim);
+  border-radius: 6px; padding: 8px 10px; margin-top: 10px; color: #a8e9bd;
+}
+
 .card .cmd-preview {
   font-family: var(--mono); font-size: 12.5px; color: var(--cyan);
   background: var(--bg-input); border: 1px solid var(--line);

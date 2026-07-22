@@ -50,7 +50,43 @@
     date:  { sum: "Show the current date and time.", usage: "date", flags: {} },
     clear: { sum: "Clear the screen.", usage: "clear", flags: {} },
     man:   { sum: "Show the manual/help for a command.", usage: "man <command>", flags: {} },
-    help:  { sum: "List what you can do here.", usage: "help", flags: {} }
+    help:  { sum: "List what you can do here.", usage: "help", flags: {} },
+
+    /* --- security / pentest tools (explained here; simulated in the lab) --- */
+    nmap:  { sum: "Network mapper: discover hosts and scan for open ports/services. The recon workhorse.",
+             usage: "nmap [options] <target>", cat: "recon",
+             flags: { "-sn": "ping scan: find live hosts, no port scan",
+                      "-sV": "detect the service + version behind each open port",
+                      "-p-": "scan all 65535 ports (default is top 1000)",
+                      "-A": "aggressive: OS detect, versions, scripts, traceroute",
+                      "-T4": "faster timing (fine on a LAN you own)",
+                      "-oN": "save normal output to a file" } },
+    nikto: { sum: "Web server scanner: checks for known-vulnerable files, misconfigs, outdated software.",
+             usage: "nikto -h <url>", cat: "web", flags: { "-h": "the host/URL to scan" } },
+    gobuster:{ sum: "Brute-forces hidden web paths/files and DNS subdomains from a wordlist.",
+             usage: "gobuster dir -u <url> -w <wordlist>", cat: "web",
+             flags: { "dir": "directory/file enumeration mode", "-u": "target URL", "-w": "wordlist file" } },
+    sqlmap:{ sum: "Automates finding and exploiting SQL injection in web apps.",
+             usage: "sqlmap -u <url> --batch", cat: "web",
+             flags: { "-u": "target URL with a parameter", "--batch": "assume defaults, no prompts",
+                      "--dbs": "list databases once injectable" } },
+    hydra: { sum: "Online password brute-forcer for login services (SSH, FTP, HTTP forms...).",
+             usage: "hydra -l <user> -P <wordlist> <target> <service>", cat: "access",
+             flags: { "-l": "single username", "-P": "password wordlist", "-t": "parallel tasks" } },
+    hashcat:{ sum: "Offline password-hash cracker (GPU-accelerated).",
+             usage: "hashcat -m <mode> <hashfile> <wordlist>", cat: "access",
+             flags: { "-m": "hash type (e.g. 0 = MD5)", "-a": "attack mode (0 = wordlist)" } },
+    msfconsole:{ sum: "Metasploit Framework: search, configure, and launch exploits + payloads.",
+             usage: "msfconsole", cat: "exploit",
+             flags: { "search": "find a module", "use": "select a module",
+                      "set": "set an option (RHOSTS, LHOST...)", "run/exploit": "launch it" } },
+    nc:    { sum: "Netcat: raw TCP/UDP connections — banner grabbing, listeners, reverse shells (in a lab).",
+             usage: "nc [-lvnp] <host> <port>", cat: "access",
+             flags: { "-l": "listen mode", "-v": "verbose", "-n": "no DNS", "-p": "port" } },
+    whatweb:{ sum: "Fingerprints a website: server, CMS, frameworks, versions.",
+             usage: "whatweb <url>", cat: "recon", flags: {} },
+    scope: { sum: "Show the rules of engagement — who/what you're allowed to test.",
+             usage: "scope", cat: "ethics", flags: {} }
   };
 
   /* ---------- Virtual filesystem (the safe practice sandbox) ---------- */
@@ -170,12 +206,129 @@
         else if (args[0] === "off") { bridge.wakeOff(); refreshWake(); out("Wakelock OFF.", "sys"); }
         else out("Usage: wakelock on | off", "err");
         break;
+      case "pentest": case "security": doPentestIntro(); break;
+      case "scope": doScope(); break;
+      case "nmap": doNmap(args); break;
+      case "nikto": case "whatweb": case "gobuster": case "sqlmap":
+        doWebTool(cmd, args); break;
+      case "msfconsole": case "hydra": case "hashcat": case "nc":
+        out(cmd + ": this is a learning sandbox — real exploitation runs in Kali/Termux, not here.", "sys");
+        out("Type 'explain " + cmd + "' or 'man " + cmd + "' to learn what it does and how to use it.", "sys");
+        break;
       case "exit": out("Nothing to exit here. (Inside a lesson, exit quits it.)", "sys"); break;
       default:
         out(cmd + ": command not found. Type 'help' to see what's available.", "err");
         return;
     }
     if (explainMode() && COMMANDS[cmd]) explain(toks);
+  }
+
+  /* ---------- Pentest learning sandbox (fully offline, fully simulated) ----------
+   * Nothing here touches a real network. It models a small practice lab so you can
+   * learn the recon workflow and read tool output without any internet or targets. */
+  var LAB_NET = "192.168.56.0/24";
+  var LAB = {
+    "192.168.56.1":  { name: "kali-you",   ports: [] },
+    "192.168.56.10": { name: "target-web", ports: [
+      { p: 22,  svc: "ssh",  ver: "OpenSSH 8.2p1" },
+      { p: 80,  svc: "http", ver: "Apache 2.4.41 (Juice Shop behind it)" },
+      { p: 3000,svc: "http", ver: "Node.js Express (OWASP Juice Shop)" } ] },
+    "192.168.56.20": { name: "target-smb", ports: [
+      { p: 22,  svc: "ssh",  ver: "OpenSSH 7.6p1" },
+      { p: 139, svc: "netbios-ssn", ver: "Samba smbd 4.x" },
+      { p: 445, svc: "microsoft-ds", ver: "Samba smbd 4.7.6" } ] },
+    "192.168.56.101":{ name: "metasploitable", ports: [
+      { p: 21,  svc: "ftp",  ver: "vsftpd 2.3.4  (!! backdoored version)" },
+      { p: 22,  svc: "ssh",  ver: "OpenSSH 4.7p1" },
+      { p: 23,  svc: "telnet", ver: "Linux telnetd" },
+      { p: 80,  svc: "http", ver: "Apache 2.2.8 (DVWA)" },
+      { p: 3306,svc: "mysql",ver: "MySQL 5.0.51a" } ] }
+  };
+  function inLab(target) {
+    return target && (target.indexOf("192.168.56.") === 0 || target === LAB_NET);
+  }
+
+  function doScope() {
+    outHTML("<b>RULES OF ENGAGEMENT — read before you ever run a tool</b>", "lesson");
+    out("1. Only test systems you OWN or have WRITTEN permission to test.", "ok");
+    out("2. Stay inside your agreed scope (these IPs, these times). Never wander.", "ok");
+    out("3. On a shared/hotspot network, other people's devices are OFF-limits.", "ok");
+    out("4. Don't destroy data or knock services offline unless the scope says so.", "ok");
+    out("5. Keep notes: what you did, when, and what you found (for the report).", "ok");
+    out("Unauthorized scanning/attacking is a crime. In here it's simulated so you", "sys");
+    out("can practice safely. Your real practice lab: " + LAB_NET + " (your own gear).", "sys");
+  }
+
+  function doPentestIntro() {
+    outHTML("<b>PENTEST TRACK — the methodology</b> (offline practice)", "lesson");
+    out("The standard flow, each step feeding the next:", "sys");
+    out("  1. scope       define what you're allowed to touch   (type: scope)");
+    out("  2. recon       find hosts + open services            (nmap -sn " + LAB_NET + ")");
+    out("  3. enumerate   dig into each service                 (nmap -sV <ip>)");
+    out("  4. exploit     abuse a weakness to get access        (msfconsole, sqlmap…)");
+    out("  5. post-exploit  loot, pivot, persist                (in your Kali lab)");
+    out("  6. report      write up findings + fixes");
+    out("Try it now:  scope   →   nmap -sn " + LAB_NET + "   →   nmap -sV 192.168.56.10", "ok");
+    out("Or open the Learn tab for the guided Pentest lessons.", "sys");
+  }
+
+  function doNmap(args) {
+    var target = args[args.length - 1] || "";
+    var flags = args.slice(0, -1);
+    if (!target || target[0] === "-") { out("Usage: nmap [-sn|-sV|-p-] <target>", "err"); return; }
+    if (!inLab(target)) {
+      out("nmap: refusing to 'scan' " + target + " — this sandbox only simulates your", "err");
+      out("practice lab (" + LAB_NET + "). Only scan systems you own or are authorized to test.", "err");
+      out("Run real scans against your own hosts from Kali/Termux. Try: nmap -sn " + LAB_NET, "sys");
+      return;
+    }
+    out("Starting Nmap (simulated) against " + target, "sys");
+    // host discovery
+    if (flags.indexOf("-sn") !== -1 || target === LAB_NET) {
+      out("Host discovery on " + LAB_NET + ":");
+      Object.keys(LAB).forEach(function (ip) {
+        out("  " + ip + "  is up   (" + LAB[ip].name + ")");
+      });
+      out(Object.keys(LAB).length + " hosts up. Next: pick one and run  nmap -sV <ip>", "ok");
+      return;
+    }
+    // single-host scan
+    var host = LAB[target];
+    if (!host) { out("Note: host down / not in the lab. Live hosts: run nmap -sn " + LAB_NET, "err"); return; }
+    var allPorts = flags.indexOf("-p-") !== -1;
+    var showVer = flags.indexOf("-sV") !== -1 || flags.indexOf("-A") !== -1;
+    out("Nmap scan report for " + host.name + " (" + target + ")");
+    if (!host.ports.length) { out("All scanned ports closed. (This is your own box.)"); return; }
+    out("PORT      STATE  SERVICE" + (showVer ? "       VERSION" : ""));
+    host.ports.forEach(function (pt) {
+      var line = (pt.p + "/tcp").padEnd ? (pt.p + "/tcp").padEnd(9) : (pt.p + "/tcp      ").slice(0, 9);
+      out(line + " open   " + (showVer ? (pt.svc + "  " + pt.ver) : pt.svc));
+    });
+    if (!showVer) out("Tip: add -sV to fingerprint versions:  nmap -sV " + target, "sys");
+    else out("Attack surface found. Web ports (80/3000) → try a web tool: whatweb / nikto.", "ok");
+  }
+
+  function doWebTool(tool, args) {
+    var url = args[args.length - 1] || "";
+    var host = url.replace(/^https?:\/\//, "").split(/[:/]/)[0];
+    if (!inLab(host)) {
+      out(tool + ": sandbox only models your lab web target at 192.168.56.10.", "err");
+      out("Try:  " + tool + " 192.168.56.10   (only scan sites you own/are authorized to test.)", "sys");
+      return;
+    }
+    if (tool === "whatweb") {
+      out("http://192.168.56.10 [200 OK]  Apache/2.4.41, Node.js Express, OWASP-Juice-Shop", "ok");
+    } else if (tool === "nikto") {
+      out("+ Server: Apache/2.4.41", "ok");
+      out("+ /ftp/: potentially interesting directory listing enabled");
+      out("+ Outdated component detected. Enumerate further with gobuster.");
+    } else if (tool === "gobuster") {
+      ["/login (200)", "/admin (301)", "/ftp (200)", "/rest (200)", "/api (200)"].forEach(function (p) { out("Found: " + p); });
+    } else if (tool === "sqlmap") {
+      out("[*] testing parameter 'q' ...", "sys");
+      out("[+] parameter 'q' is vulnerable (boolean-based blind).  In a real lab: --dbs to dump.", "ok");
+    }
+    out("(Simulated result — run the real tool from Kali against your own target.)", "sys");
   }
 
   /* ---------- Individual commands ---------- */
@@ -291,6 +444,13 @@
     out("  learn            open the guided lessons");
     out("  explain <cmd>    describe a command without running it");
     out("  (toggle 'Explain mode' to auto-explain everything)");
+    out("Security / pentest (simulated lab, offline):", "sys");
+    out("  pentest          the attack methodology, top to bottom");
+    out("  scope            the rules of engagement (read first!)");
+    out("  nmap -sn 192.168.56.0/24    discover hosts in the practice lab");
+    out("  nmap -sV <ip>    scan a lab host's services");
+    out("  whatweb/nikto/gobuster/sqlmap <ip>   web recon on the lab target");
+    out("  (Learn tab has the guided Pentest lessons + in-depth Field Guide)");
     out("Real device (needs Termux):", "sys");
     out("  termux <cmd>     run a real command in Termux");
     out("  wakelock on|off  keep the CPU awake for servers");
@@ -320,6 +480,27 @@
       { say: "Make a folder: <b>mkdir sandbox</b>.", ok: function (c) { return /^mkdir\s+sandbox/.test(c); }, hint: "Type: mkdir sandbox" },
       { say: "See the whole tree: <b>tree</b>.", ok: function (c) { return c === "tree"; }, hint: "Type: tree" },
       { say: "Delete the folder: <b>rm -r sandbox</b>. (In real life, rm has no undo!)", ok: function (c) { return /^rm\s+-r\s+sandbox/.test(c); }, hint: "Type: rm -r sandbox" }
+    ]},
+
+    /* ---- Pentest track (simulated lab, offline) ---- */
+    { id: "pt-roe", title: "Pentest 1 · Rules of engagement", steps: [
+      { say: "Before ANY test you must know your limits. Type <b>scope</b> to read the rules of engagement.", ok: function (c) { return c === "scope"; }, hint: "Type: scope" },
+      { say: "Legal, authorized, in-scope — always. Now see the whole attack methodology: type <b>pentest</b>.", ok: function (c) { return c === "pentest" || c === "security"; }, hint: "Type: pentest" }
+    ]},
+    { id: "pt-recon", title: "Pentest 2 · Recon — find the hosts", steps: [
+      { say: "An attacker first maps the network. Discover live hosts: <b>nmap -sn 192.168.56.0/24</b>", ok: function (c) { return /^nmap\s+-sn\s+192\.168\.56\.0\/24/.test(c); }, hint: "Type: nmap -sn 192.168.56.0/24" },
+      { say: "You found 4 hosts. Fingerprint the web box's services + versions: <b>nmap -sV 192.168.56.10</b>", ok: function (c) { return /^nmap\s+-sV\s+192\.168\.56\.10/.test(c); }, hint: "Type: nmap -sV 192.168.56.10" },
+      { say: "Common scans miss ports. Scan ALL of them on the old box: <b>nmap -p- 192.168.56.101</b>", ok: function (c) { return /^nmap\s+-p-\s+192\.168\.56\.101/.test(c); }, hint: "Type: nmap -p- 192.168.56.101" }
+    ]},
+    { id: "pt-enum", title: "Pentest 3 · Enumerate the web target", steps: [
+      { say: "Identify the web stack: <b>whatweb 192.168.56.10</b>", ok: function (c) { return /^whatweb\s+192\.168\.56\.10/.test(c); }, hint: "Type: whatweb 192.168.56.10" },
+      { say: "Scan the web server for known issues: <b>nikto 192.168.56.10</b>", ok: function (c) { return /^nikto\s+192\.168\.56\.10/.test(c); }, hint: "Type: nikto 192.168.56.10" },
+      { say: "Brute-force hidden pages/dirs: <b>gobuster dir -u 192.168.56.10</b>", ok: function (c) { return /^gobuster/.test(c); }, hint: "Type: gobuster dir -u 192.168.56.10" }
+    ]},
+    { id: "pt-exploit", title: "Pentest 4 · Find & confirm a flaw", steps: [
+      { say: "Test the search parameter for SQL injection: <b>sqlmap 192.168.56.10</b>", ok: function (c) { return /^sqlmap\s+192\.168\.56\.10/.test(c); }, hint: "Type: sqlmap 192.168.56.10" },
+      { say: "Confirmed vulnerable. In your real Kali lab you'd exploit it. First, re-read the limits: type <b>scope</b>.", ok: function (c) { return c === "scope"; }, hint: "Type: scope" },
+      { say: "Now read the in-depth Field Guide below (tap a chapter) to learn HOW each attack works and how to STOP it.", ok: function (c) { return c === "learn" || c === "guide"; }, hint: "Type: learn" }
     ]}
   ];
   var lesson = { active: false, l: null, step: 0 };
@@ -356,12 +537,141 @@
     LESSONS.forEach(function (l) {
       var card = document.createElement("div");
       card.className = "card";
-      card.innerHTML = "<h3>" + l.title + "</h3><p>" + l.steps.length + " steps</p>";
+      var isPt = l.id.indexOf("pt-") === 0;
+      card.innerHTML = "<h3>" + l.title + "</h3><p>" + l.steps.length + " steps" +
+        (isPt ? " · <span style='color:var(--yellow)'>security</span>" : "") + "</p>";
       var b = document.createElement("button");
       b.className = "btn primary"; b.textContent = "Start";
       b.onclick = function () { startLesson(l.id); };
       var row = document.createElement("div"); row.className = "btnrow"; row.appendChild(b);
       card.appendChild(row); box.appendChild(card);
+    });
+    renderGuide(box);
+  }
+
+  /* ---------- In-depth offline Field Guide (offense + how to defend) ----------
+   * Career-oriented reference. Each chapter explains what attackers actually do,
+   * the real tools/commands, and — because the goal is to STOP them — the
+   * defender's countermeasures and detection for every technique. */
+  var GUIDE = [
+    { id: "g-ethics", title: "0 · Ethics, Law & Authorization", body:
+      "<p><b>The one rule that keeps this a career and not a crime:</b> only ever touch systems you own or have <b>explicit written permission</b> to test.</p>" +
+      "<ul><li><b>Scope</b> — the exact IPs/domains/hours you're cleared for. Straying outside it is illegal even mid-engagement.</li>" +
+      "<li><b>Rules of Engagement (ROE)</b> — what's allowed: social engineering? DoS? data exfiltration? Get it in writing.</li>" +
+      "<li><b>Law</b> — unauthorized access is criminal (e.g. the US CFAA, UK Computer Misuse Act, and equivalents worldwide). 'I was just testing' is not a defense.</li>" +
+      "<li><b>Engagement types</b> — black-box (no info), grey-box (some), white-box (full access + source). Red team = stealthy adversary emulation; pentest = find as many holes as possible.</li></ul>" +
+      "<p><b>Get authorized experience legally:</b> HackTheBox, TryHackMe, PortSwigger Web Security Academy, PicoCTF, OverTheWire, VulnHub, and your own home lab.</p>" +
+      "<p class='gtag'>🛡️ Defender's view: know your own authorization boundaries too — a signed scope protects <i>you</i>. Blue teams should log and alert on any scanning that appears outside sanctioned windows.</p>" },
+
+    { id: "g-method", title: "1 · The Attack Lifecycle", body:
+      "<p>Real intrusions follow a repeatable chain. Learn it and you can predict — and interrupt — an attacker at every stage.</p>" +
+      "<p><b>Lockheed Martin Cyber Kill Chain:</b> Recon → Weaponize → Deliver → Exploit → Install → Command &amp; Control (C2) → Actions on Objectives.</p>" +
+      "<p><b>Pentest phases (PTES):</b> Pre-engagement → Intelligence gathering → Threat modeling → Vulnerability analysis → Exploitation → Post-exploitation → Reporting.</p>" +
+      "<p><b>MITRE ATT&amp;CK</b> is the industry map of real-world attacker <i>tactics</i> (the why: Initial Access, Execution, Persistence, Privilege Escalation, Defense Evasion, Credential Access, Discovery, Lateral Movement, Collection, Exfiltration, Impact) and <i>techniques</i> (the how, each a T-number like T1190). Memorize this taxonomy — every SOC and detection tool speaks ATT&amp;CK.</p>" +
+      "<p class='gtag'>🛡️ Defender's view: map your logging/detection coverage to ATT&amp;CK. Every technique the attacker uses is an opportunity to detect them — the earlier in the chain you break it, the cheaper the incident.</p>" },
+
+    { id: "g-recon", title: "2 · Reconnaissance", body:
+      "<p>Gathering information before touching the target.</p>" +
+      "<p><b>Passive</b> (no packets to target): WHOIS, DNS records, Google dorking, Shodan/Censys, certificate transparency logs, LinkedIn/GitHub leaks, <code>theHarvester</code>, <code>amass</code>. Finds domains, employees, tech stack, exposed services.</p>" +
+      "<p><b>Active</b> (touching the target): DNS zone transfers, ping sweeps, port scans (next chapter).</p>" +
+      "<p>Example: <code>whatweb https://target</code>, <code>amass enum -d target.com</code>, <code>theHarvester -d target.com -b all</code>.</p>" +
+      "<p class='gtag'>🛡️ Defender's view: shrink your attack surface — remove stale DNS records, scrub metadata, keep secrets out of GitHub, and monitor certificate-transparency + brand mentions. You can't stop passive recon, but you can starve it.</p>" },
+
+    { id: "g-scan", title: "3 · Scanning & Enumeration", body:
+      "<p>Turning 'there's a host' into 'here's exactly what's running.' This is where most footholds are found.</p>" +
+      "<p><b>nmap</b> is the core tool:</p>" +
+      "<ul><li><code>nmap -sn 10.0.0.0/24</code> — host discovery (who's alive)</li>" +
+      "<li><code>nmap -sV -p- 10.0.0.5</code> — every port + service versions</li>" +
+      "<li><code>nmap -A</code> — OS detection, default scripts, traceroute</li>" +
+      "<li><code>nmap --script vuln 10.0.0.5</code> — NSE vuln checks</li></ul>" +
+      "<p><b>Service enumeration</b> is where the real work is: SMB (<code>enum4linux</code>, <code>smbclient</code>), web (dir brute-forcing with <code>gobuster</code>/<code>feroxbuster</code>), SNMP, LDAP, databases. Version numbers → searchable CVEs.</p>" +
+      "<p class='gtag'>🛡️ Defender's view: close unused ports, patch to kill version-based CVEs, put an IDS/IPS (Suricata, Zeek) on the wire — mass port scans and NSE scripts are noisy and very detectable. Alert on them.</p>" },
+
+    { id: "g-web", title: "4 · Web Application Attacks (OWASP Top 10)", body:
+      "<p>Web apps are the #1 attack surface. Know each class cold:</p>" +
+      "<ul><li><b>Injection (SQLi/command)</b> — untrusted input hits an interpreter. <code>sqlmap -u 'url?id=1' --batch --dbs</code>. <i>Fix:</i> parameterized queries / prepared statements.</li>" +
+      "<li><b>Broken Access Control</b> — accessing data/actions you shouldn't (IDOR: change <code>?id=1</code> to <code>?id=2</code>). <i>Fix:</i> server-side authorization on every request.</li>" +
+      "<li><b>XSS</b> — inject JS that runs in a victim's browser (steal sessions). <i>Fix:</i> output-encode, CSP.</li>" +
+      "<li><b>Auth failures</b> — weak passwords, no lockout, guessable tokens. <i>Fix:</i> MFA, rate-limit, strong session handling.</li>" +
+      "<li><b>SSRF</b> — make the server request internal resources. <i>Fix:</i> allow-list outbound, block metadata endpoints.</li>" +
+      "<li><b>Security misconfig / vulnerable components</b> — default creds, verbose errors, outdated libs. <i>Fix:</i> harden, patch, remove defaults.</li></ul>" +
+      "<p>Tooling: <b>Burp Suite</b> (the intercepting proxy every web tester lives in), <code>nikto</code>, <code>ffuf</code>, and OWASP <b>ZAP</b>. Practice on <b>Juice Shop</b> / <b>DVWA</b>.</p>" +
+      "<p class='gtag'>🛡️ Defender's view: secure-code reviews, input validation + output encoding, a WAF, dependency scanning (SCA), and logging every auth + access-control decision. Most of the Top 10 dies with parameterized queries and server-side authz.</p>" },
+
+    { id: "g-creds", title: "5 · Password & Credential Attacks", body:
+      "<p>Stolen credentials are behind most breaches.</p>" +
+      "<ul><li><b>Online brute/spray</b> — guess against a live login. <code>hydra -l admin -P rockyou.txt ssh://10.0.0.5</code>. Password <i>spraying</i> tries one common password across many users to dodge lockouts.</li>" +
+      "<li><b>Offline cracking</b> — you have the hashes; crack them fast on GPU. <code>hashcat -m 0 hashes.txt rockyou.txt</code> (mode = hash type).</li>" +
+      "<li><b>Credential stuffing</b> — reuse creds leaked from other breaches.</li>" +
+      "<li><b>Hashing matters</b> — MD5/SHA1 crack instantly; bcrypt/argon2 with salt are slow to crack by design.</li></ul>" +
+      "<p class='gtag'>🛡️ Defender's view: enforce <b>MFA everywhere</b> (kills the vast majority of these), strong salted hashing (argon2/bcrypt), account lockout + rate limiting, ban breached passwords (HaveIBeenPwned API), and alert on spray patterns (many users, one password, short window).</p>" },
+
+    { id: "g-exploit", title: "6 · Exploitation & Metasploit", body:
+      "<p>Turning a vulnerability into access.</p>" +
+      "<p><b>Metasploit</b> workflow:</p>" +
+      "<ul><li><code>msfconsole</code> → <code>search vsftpd 2.3.4</code></li>" +
+      "<li><code>use exploit/...</code> → <code>show options</code></li>" +
+      "<li><code>set RHOSTS 10.0.0.5</code> / <code>set LHOST &lt;you&gt;</code></li>" +
+      "<li><code>set PAYLOAD ...</code> → <code>exploit</code></li></ul>" +
+      "<p><b>Payloads</b>: bind shell (attacker connects in) vs reverse shell (target connects out, beats firewalls). <b>Meterpreter</b> is Metasploit's feature-rich in-memory payload. Public exploits live in Exploit-DB / <code>searchsploit</code>, indexed by CVE.</p>" +
+      "<p class='gtag'>🛡️ Defender's view: <b>patch management</b> is the single biggest win — most exploits target known, fixed CVEs. Add EDR to catch payloads/Meterpreter in memory, egress filtering to block reverse shells, and network segmentation to limit blast radius.</p>" },
+
+    { id: "g-post", title: "7 · Post-Exploitation: Privesc, Lateral Movement, Persistence", body:
+      "<p>A foothold is the beginning, not the end.</p>" +
+      "<ul><li><b>Privilege escalation</b> — user → root/admin via kernel exploits, misconfigured sudo, SUID binaries, weak service perms (Linux: <code>linpeas</code>; Windows: <code>winPEAS</code>, token abuse).</li>" +
+      "<li><b>Credential harvesting</b> — dump memory/registry for hashes &amp; tokens (Mimikatz on Windows), then <b>pass-the-hash</b>.</li>" +
+      "<li><b>Lateral movement</b> — hop to other hosts with reused creds (PsExec, WinRM, SSH keys).</li>" +
+      "<li><b>Persistence</b> — survive reboots: cron jobs, services, scheduled tasks, SSH keys, run keys.</li>" +
+      "<li><b>Defense evasion</b> — clearing logs, living-off-the-land (using built-in tools). <i>Studying this is how you learn to detect it.</i></li></ul>" +
+      "<p class='gtag'>🛡️ Defender's view: least privilege, remove local admin, segment the network, unique local admin passwords (LAPS), and centralize + protect logs. Watch for Mimikatz behavior, new services/scheduled tasks, and impossible-travel logins — classic lateral-movement tells.</p>" },
+
+    { id: "g-blue", title: "8 · Blue Team: Detection & Response (your career)", body:
+      "<p>This is where a defender lives. Every attacker action above leaves evidence — your job is to see it and act.</p>" +
+      "<ul><li><b>Logging</b> — endpoints (Sysmon), auth logs, DNS, proxy, cloud. You can't detect what you don't log.</li>" +
+      "<li><b>SIEM</b> — Splunk, Elastic/ELK, Microsoft Sentinel, Wazuh: aggregate logs, write detection rules (often as Sigma rules), alert.</li>" +
+      "<li><b>Detection engineering</b> — map coverage to ATT&amp;CK; write &amp; tune detections; reduce false positives.</li>" +
+      "<li><b>Threat hunting</b> — proactively search for attackers who slipped past alerts.</li>" +
+      "<li><b>Incident Response (IR)</b> — the PICERL cycle: Preparation, Identification, Containment, Eradication, Recovery, Lessons learned.</li>" +
+      "<li><b>Adversary emulation</b> — run Atomic Red Team / Caldera against your lab to test whether your detections actually fire.</li></ul>" +
+      "<p class='gtag'>🛡️ Career path: SOC Analyst → Detection Engineer / Incident Responder → Threat Hunter. Certs to aim at: Security+ (foundation), BTL1/CySA+ (blue team), then GCIH/GCIA. Learn one SIEM deeply and one scripting language (Python).</p>" },
+
+    { id: "g-report", title: "9 · Reporting & Remediation", body:
+      "<p>The deliverable that makes a pentest valuable — and the bridge to defense.</p>" +
+      "<ul><li><b>Executive summary</b> — risk in business terms for leadership.</li>" +
+      "<li><b>Findings</b> — each with: description, evidence/steps to reproduce, impact, <b>CVSS</b> severity score, and a concrete <b>remediation</b>.</li>" +
+      "<li><b>Prioritize</b> by risk (likelihood × impact), not by how cool the exploit was.</li>" +
+      "<li><b>Retest</b> — verify fixes actually closed the hole.</li></ul>" +
+      "<p class='gtag'>🛡️ Defender's view: turn each finding into a permanent control + a detection rule so the same class of bug is caught automatically next time. A finding fixed once is good; a finding that can never recur silently is better.</p>" }
+  ];
+
+  function renderGuide(box) {
+    var hdr = document.createElement("div");
+    hdr.className = "section-title";
+    hdr.style.marginTop = "18px";
+    hdr.textContent = "Field guide — offense & defense (offline, in depth)";
+    box.appendChild(hdr);
+
+    GUIDE.forEach(function (ch) {
+      var card = document.createElement("div");
+      card.className = "card";
+      var head = document.createElement("h3");
+      head.textContent = ch.title;
+      head.style.cursor = "pointer";
+      var body = document.createElement("div");
+      body.className = "guide-body";
+      body.style.display = "none";
+      body.innerHTML = ch.body;
+      var toggle = document.createElement("button");
+      toggle.className = "btn"; toggle.type = "button"; toggle.textContent = "Read ▾";
+      toggle.onclick = function () {
+        var open = body.style.display === "none";
+        body.style.display = open ? "block" : "none";
+        toggle.textContent = open ? "Hide ▴" : "Read ▾";
+      };
+      head.onclick = toggle.onclick;
+      var row = document.createElement("div"); row.className = "btnrow"; row.appendChild(toggle);
+      card.appendChild(head); card.appendChild(row); card.appendChild(body);
+      box.appendChild(card);
     });
   }
 
@@ -467,7 +777,9 @@
   function explainMode() { return document.getElementById("explainToggle").checked; }
 
   /* ---------- Command chips ---------- */
-  var CHIPS = ["help", "ls", "ls -a", "pwd", "cd projects", "cat notes.txt", "tree", "mkdir demo", "clear", "learn"];
+  var CHIPS = ["help", "ls", "pwd", "cat notes.txt", "tree", "learn",
+    "pentest", "scope", "nmap -sn 192.168.56.0/24", "nmap -sV 192.168.56.10",
+    "whatweb 192.168.56.10", "clear"];
   function renderChips() {
     var box = document.getElementById("chips");
     CHIPS.forEach(function (c) {
