@@ -115,6 +115,59 @@
   var history = [];
   var histIdx = -1;
 
+  /* ---------- Offline session persistence ----------
+   * The sandbox filesystem, command history, lesson progress, the Explain
+   * toggle, and the on-screen transcript all survive app restarts via
+   * localStorage — so your offline work is never lost. Everything here is
+   * local-only: no network, works fully offline. */
+  var PERSIST = {
+    fs:       "terminalapi.fs",       // sandbox filesystem + current directory
+    history:  "terminalapi.history",  // command history (recalled with up/down)
+    progress: "terminalapi.progress", // completed lesson ids
+    explain:  "terminalapi.explain",  // Explain-mode toggle state
+    screen:   "terminalapi.screen"    // last session transcript (resume on launch)
+  };
+  var HISTORY_CAP = 300;   // keep the last N commands
+  var SCREEN_CAP = 300;    // keep the last N transcript lines
+
+  function saveJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  function readJSON(k, dflt) {
+    try { var v = JSON.parse(localStorage.getItem(k)); return v == null ? dflt : v; }
+    catch (e) { return dflt; }
+  }
+
+  function persistSandbox() { saveJSON(PERSIST.fs, { fs: fs, cwd: cwd }); }
+  function persistHistory() { saveJSON(PERSIST.history, history.slice(-HISTORY_CAP)); }
+  function persistScreen() {
+    if (!screen) return;
+    while (screen.children.length > SCREEN_CAP) screen.removeChild(screen.firstChild);
+    try { localStorage.setItem(PERSIST.screen, screen.innerHTML); } catch (e) {}
+  }
+  function persistSession() { persistSandbox(); persistHistory(); persistScreen(); }
+
+  function loadProgress() { return readJSON(PERSIST.progress, {}); }
+  function markLessonComplete(id) { var p = loadProgress(); p[id] = true; saveJSON(PERSIST.progress, p); }
+
+  /* Restore saved state on launch. Returns the previous transcript HTML (if any)
+   * so init() can replay the session instead of showing the welcome banner. */
+  function restoreSession() {
+    var s = readJSON(PERSIST.fs, null);
+    if (s && s.fs && typeof s.fs === "object") {
+      fs = s.fs;
+      cwd = (s.cwd && s.cwd.length) ? s.cwd : ["~"];
+    }
+    var h = readJSON(PERSIST.history, null);
+    if (h && h.length) { history = h; histIdx = history.length; }
+    var ex = null;
+    try { ex = localStorage.getItem(PERSIST.explain); } catch (e) {}
+    if (ex === "1") { var t = document.getElementById("explainToggle"); if (t) t.checked = true; }
+    var prev = null;
+    try { prev = localStorage.getItem(PERSIST.screen); } catch (e) {}
+    return prev;
+  }
+
+  function resetSandbox() { fs = freshFS(); cwd = ["~"]; persistSandbox(); }
+
   /* navigate to a directory node given cwd (excluding leading ~) */
   function nodeAt(segs) {
     var node = fs;
@@ -180,6 +233,8 @@
     // lesson interception
     if (lesson.active) { lessonHandle(line); }
     else dispatch(line);
+
+    persistSession();   // save sandbox + history + transcript after every command
   }
 
   function dispatch(line) {
@@ -206,6 +261,8 @@
       case "explain": explain(args.length ? args : []); if (!args.length) out("Usage: explain <command>", "err"); break;
       case "history": history.forEach(function (h, i) { out(("  " + (i + 1)).slice(-4) + "  " + h); }); break;
       case "learn": switchView("learn"); out("Opening the Learn tab — pick a lesson.", "sys"); break;
+      case "sessions": doSessions(); break;
+      case "reset": resetSandbox(); out("Sandbox filesystem reset to a fresh state.", "ok"); break;
       case "termux":
         if (!args.length) { out("Usage: termux <command to run in Termux>", "err"); break; }
         var real = line.slice(line.indexOf("termux") + 7);
@@ -557,6 +614,9 @@
     out("Practice commands (safe sandbox):", "sys");
     out("  pwd  ls  cd  cat  echo  mkdir  touch  rm  cp  mv  tree  grep  head  tail");
     out("  whoami  date  history  man <cmd>  clear");
+    out("Your offline session (saved on this device):", "sys");
+    out("  sessions         show what's saved (history, progress, files)");
+    out("  reset            wipe the sandbox filesystem back to fresh");
     out("Learning:", "sys");
     out("  learn            open the guided lessons");
     out("  explain <cmd>    describe a command without running it");
@@ -575,6 +635,24 @@
     out("Real device (needs Termux):", "sys");
     out("  termux <cmd>     run a real command in Termux");
     out("  wakelock on|off  keep the CPU awake for servers");
+  }
+
+  function doSessions() {
+    var progress = loadProgress();
+    var done = LESSONS.filter(function (l) { return progress[l.id]; }).length;
+    var fileCount = 0;
+    (function count(node) {
+      Object.keys(node).forEach(function (k) {
+        if (isDir(node[k])) count(node[k]); else fileCount++;
+      });
+    })(fs);
+    out("Your offline session", "sys");
+    out("  Commands in history : " + history.length);
+    out("  Lessons complete    : " + done + " / " + LESSONS.length);
+    out("  Files in sandbox    : " + fileCount);
+    out("  Saved servers       : " + loadServers().length);
+    out("Everything is stored on THIS device and works with no internet.", "ok");
+    out("Type 'reset' to wipe the sandbox filesystem back to fresh.", "sys");
   }
 
   function escapeHTML(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
@@ -686,7 +764,8 @@
       out("✓ nice.", "ok");
       lesson.step++;
       if (lesson.step >= lesson.l.steps.length) {
-        outHTML("🎉 Lesson complete: <b>" + lesson.l.title + "</b>. Try the next one in the Learn tab!", "lesson");
+        markLessonComplete(lesson.l.id);
+        outHTML("🎉 Lesson complete: <b>" + lesson.l.title + "</b>. Progress saved. Try the next one in the Learn tab!", "lesson");
         lesson.active = false;
       } else lessonPrompt();
     } else {
@@ -696,14 +775,25 @@
   function renderLessons() {
     var box = document.getElementById("lessonList");
     box.innerHTML = "";
+    var progress = loadProgress();
+    var done = LESSONS.filter(function (l) { return progress[l.id]; }).length;
+
+    var summary = document.createElement("div");
+    summary.className = "banner ok";
+    summary.innerHTML = "Your progress: <b>" + done + " / " + LESSONS.length +
+      "</b> lessons complete. Saved on this device — works offline.";
+    box.appendChild(summary);
+
     LESSONS.forEach(function (l) {
+      var complete = !!progress[l.id];
       var card = document.createElement("div");
-      card.className = "card";
+      card.className = "card" + (complete ? " lesson-done" : "");
       var isPt = l.id.indexOf("pt-") === 0;
-      card.innerHTML = "<h3>" + l.title + "</h3><p>" + l.steps.length + " steps" +
-        (isPt ? " · <span style='color:var(--yellow)'>security</span>" : "") + "</p>";
+      card.innerHTML = "<h3>" + (complete ? "✓ " : "") + l.title + "</h3><p>" + l.steps.length + " steps" +
+        (isPt ? " · <span style='color:var(--gold)'>security</span>" : "") +
+        (complete ? " · <span style='color:var(--mint)'>completed</span>" : "") + "</p>";
       var b = document.createElement("button");
-      b.className = "btn primary"; b.textContent = "Start";
+      b.className = "btn primary"; b.textContent = complete ? "Restart" : "Start";
       b.onclick = function () { startLesson(l.id); };
       var row = document.createElement("div"); row.className = "btnrow"; row.appendChild(b);
       card.appendChild(row); box.appendChild(card);
@@ -931,6 +1021,7 @@
     var btns = document.querySelectorAll("nav button");
     for (var j = 0; j < btns.length; j++) btns[j].classList.toggle("active", btns[j].getAttribute("data-view") === name);
     if (name === "servers") renderServers();
+    if (name === "learn") renderLessons();
     if (name === "help") renderHelp();
     if (name === "terminal") document.getElementById("cmdInput").focus();
   }
@@ -966,17 +1057,32 @@
 
   function init() {
     renderChips();
+    var prevScreen = restoreSession();   // load saved sandbox, history, progress, toggle
     renderLessons();
-    outHTML("<b style='color:var(--green)'>Welcome to Terminalapi</b>", "sys");
-    out("A friendly place to learn bash — then launch real servers via Termux.");
-    out("Type 'help', tap a chip below, or open the Learn tab to start a lesson.");
-    out("");
+
+    if (prevScreen && prevScreen.replace(/\s/g, "")) {
+      screen.innerHTML = prevScreen;
+      outHTML("<span style='opacity:.65'>—— previous session restored (offline) ——</span>", "sys");
+      screen.scrollTop = screen.scrollHeight;
+    } else {
+      outHTML("<b style='color:var(--mint)'>Welcome to Terminalapi</b>", "sys");
+      out("A friendly place to learn bash — then launch real servers via Termux.");
+      out("Your sandbox, history and lesson progress are saved on this device and");
+      out("work fully offline. Type 'help', tap a chip, or open Learn to start.");
+      out("");
+    }
 
     document.getElementById("runBtn").onclick = submit;
     document.getElementById("cmdInput").addEventListener("keydown", function (e) {
       if (e.key === "Enter") { submit(); }
       else if (e.key === "ArrowUp") { if (histIdx > 0) { histIdx--; this.value = history[histIdx] || ""; } e.preventDefault(); }
       else if (e.key === "ArrowDown") { if (histIdx < history.length - 1) { histIdx++; this.value = history[histIdx] || ""; } else { histIdx = history.length; this.value = ""; } e.preventDefault(); }
+    });
+
+    // Persist the Explain-mode toggle so it stays how you left it.
+    var exToggle = document.getElementById("explainToggle");
+    if (exToggle) exToggle.addEventListener("change", function () {
+      try { localStorage.setItem(PERSIST.explain, this.checked ? "1" : "0"); } catch (e) {}
     });
 
     // nav

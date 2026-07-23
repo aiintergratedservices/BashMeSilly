@@ -246,3 +246,7 @@ nav button.active::before {
   content: ""; position: absolute; top: 0; width: 28px; height: 3px; border-radius: 0 0 4px 4px;
   background: var(--grad); box-shadow: 0 0 12px rgba(139,124,255,.9);
 }
+
+/* Completed lessons — subtle mint accent (offline progress tracking). */
+.card.lesson-done { border-color: rgba(94,234,212,.4); }
+.card.lesson-done h3 { color: var(--mint); }
