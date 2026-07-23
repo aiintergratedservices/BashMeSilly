@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Kortana's Terminus runs on the phone itself over plain HTTP (127.0.0.1:3300),
+  so the app needs a cleartext exception — but ONLY for loopback. Everything
+  else stays cleartext-blocked (the secure Android default), so this narrow
+  allowance never weakens traffic to any real host on the network.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">::1</domain>
+    </domain-config>
+</network-security-config>

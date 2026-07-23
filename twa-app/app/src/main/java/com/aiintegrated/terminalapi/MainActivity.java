@@ -65,6 +65,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
 
         bridge = new TerminalBridge(this);
+        bridge.attachWebView(webView);   // lets the bridge deliver async HTTP results back to JS
         webView.addJavascriptInterface(bridge, "Android");
 
         webView.loadUrl(BASE_URL);

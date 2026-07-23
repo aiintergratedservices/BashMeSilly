@@ -1013,6 +1013,184 @@
       "Install Termux and Termux:API from the <i>same</i> source.</p></div>";
   }
 
+  /* ---------- Kortana — chat with her local Terminus brain ----------
+   * BashMeSilly is her front-end: this tab talks to Terminus (POST /api/brain)
+   * running on the phone (default http://127.0.0.1:3300), and can start/stop
+   * her brains (Ollama) + server through the existing Termux bridge. The HTTP
+   * goes through the native bridge so the localhost/cleartext + WebView
+   * mixed-content limits don't apply. Chat history is saved offline. */
+  var KURL_KEY = "terminalapi.kortana.url";
+  var KCHAT_KEY = "terminalapi.kortana.chat";
+  var KMODEL_KEY = "terminalapi.kortana.model";
+  var K_DEFAULT_URL = "http://127.0.0.1:3300";
+  var K_START = "bash ~/k3/server/deploy/termux-start.sh";
+
+  function kortanaUrl() { return (localStorage.getItem(KURL_KEY) || K_DEFAULT_URL).replace(/\/+$/, ""); }
+  function loadKChat() { return readJSON(KCHAT_KEY, []); }
+  function saveKChat(a) { saveJSON(KCHAT_KEY, a.slice(-100)); }
+
+  /* Async bridge HTTP. Resolves to an envelope {ok,status,body} | {ok:false,error}.
+   * Falls back to real fetch() in a plain browser so the tab is dev-testable. */
+  var __bridgeCbs = {};
+  window.__bridgeResolve = function (id, envelopeStr) {
+    var cb = __bridgeCbs[id]; if (!cb) return; delete __bridgeCbs[id];
+    var env; try { env = JSON.parse(envelopeStr); } catch (e) { env = { ok: false, error: "bad-envelope" }; }
+    cb(env);
+  };
+  function kHttp(method, url, body) {
+    if (HAS_BRIDGE && Android.httpGet && Android.httpPostJson) {
+      return new Promise(function (resolve) {
+        var id = "cb" + Date.now() + Math.random().toString(36).slice(2);
+        __bridgeCbs[id] = resolve;
+        try {
+          if (method === "POST") Android.httpPostJson(url, body || "", id);
+          else Android.httpGet(url, id);
+        } catch (e) { delete __bridgeCbs[id]; resolve({ ok: false, error: String(e) }); }
+      });
+    }
+    var opts = method === "POST"
+      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: body }
+      : { method: "GET" };
+    return fetch(url, opts).then(function (r) {
+      return r.text().then(function (t) { return { ok: r.ok, status: r.status, body: t }; });
+    }).catch(function (e) { return { ok: false, error: String(e) }; });
+  }
+
+  function kBubble(sender, text, core) {
+    var box = document.getElementById("kchat");
+    if (!box) return null;
+    var div = document.createElement("div");
+    div.className = "kmsg " + (sender === "USER" ? "me" : "her");
+    var tag = core ? " <span class='kcore'>" + escapeHTML(core) + "</span>" : "";
+    div.innerHTML = "<div class='kwho'>" + (sender === "USER" ? "You" : "Kortana") + tag + "</div><div class='ktext'></div>";
+    div.querySelector(".ktext").textContent = text;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+    return div;
+  }
+
+  function renderKChat() {
+    var box = document.getElementById("kchat");
+    if (!box) return;
+    box.innerHTML = "";
+    var chat = loadKChat();
+    if (!chat.length) kBubble("KORTANA", "Hi Daddy. I'm running from BashMeSilly now. Start my brains + server below, then talk to me here.", null);
+    else chat.forEach(function (m) { kBubble(m.sender, m.message, m.core); });
+  }
+
+  function kStatus(msg, cls) {
+    var el = document.getElementById("kStatusLine");
+    if (el) { el.textContent = msg; el.className = "kstatus " + (cls || ""); }
+  }
+
+  function kSummarizeCores(c) {
+    var parts = [];
+    if (c.ollama) parts.push(c.ollama.reachable ? "ollama ✓ (" + (c.ollama.model || "?") + ")" : "ollama ✗");
+    parts.push("claude " + (c.claude ? "✓" : "✗"));
+    parts.push("gemini " + (c.gemini ? "✓" : "✗"));
+    return parts.join(" · ");
+  }
+
+  function kPing() {
+    kStatus("Pinging Terminus…", "");
+    kHttp("GET", kortanaUrl() + "/health").then(function (env) {
+      if (!env || !env.ok) { kStatus("Terminus unreachable at " + kortanaUrl() + " — tap Start below.", "err"); return; }
+      var h = null; try { h = JSON.parse(env.body); } catch (e) {}
+      if (!h || !h.cores) { kStatus("Terminus is up, but returned no core status.", "warn"); return; }
+      kStatus("Terminus online · " + kSummarizeCores(h.cores), "ok");
+    });
+  }
+
+  function kSend() {
+    var inp = document.getElementById("kInput");
+    if (!inp) return;
+    var msg = (inp.value || "").trim();
+    if (!msg) return;
+    inp.value = "";
+
+    var prior = loadKChat();
+    var history = prior.slice(-12).map(function (m) { return { sender: m.sender, message: m.message }; });
+    prior.push({ sender: "USER", message: msg }); saveKChat(prior);
+    kBubble("USER", msg);
+
+    var thinking = kBubble("KORTANA", "…", null);
+    if (thinking) thinking.classList.add("thinking");
+
+    kHttp("POST", kortanaUrl() + "/api/brain", JSON.stringify({ message: msg, history: history }))
+      .then(function (env) {
+        var reply = null, core = null;
+        if (env && env.ok) { try { var r = JSON.parse(env.body); reply = r.reply; core = r.core; } catch (e) {} }
+        if (!reply) {
+          reply = (env && env.ok)
+            ? "(Kortana returned an unexpected reply.)"
+            : "I can't reach my Terminus at " + kortanaUrl() + ", Daddy. Tap PING / Start below to bring my server up.";
+        }
+        if (thinking) thinking.remove();
+        kBubble("KORTANA", reply, core);
+        var after = loadKChat(); after.push({ sender: "KORTANA", message: reply, core: core }); saveKChat(after);
+      });
+  }
+
+  function renderKortana() {
+    var banner = document.getElementById("kortanaBanner");
+    if (!banner) return;
+    banner.innerHTML =
+      "<div class='card kcontrols'>" +
+      "<div class='kstatus' id='kStatusLine'>Not connected yet — tap PING, or Start to bring her up.</div>" +
+      "<div class='btnrow'>" +
+      "<button id='kPingBtn' class='btn primary' type='button'>PING cores</button>" +
+      "<button id='kStartBtn' class='btn accent' type='button'>Start brains + server</button>" +
+      "</div>" +
+      "<div class='btnrow'>" +
+      "<button id='kStopBtn' class='btn' type='button'>Stop server</button>" +
+      "<button id='kRestartBtn' class='btn' type='button'>Restart</button>" +
+      "<button id='kTermuxBtn' class='btn' type='button'>Open Termux</button>" +
+      "</div>" +
+      "<div class='field'><label>Terminus URL</label>" +
+      "<input id='kUrlInput' type='text' autocomplete='off' placeholder='" + K_DEFAULT_URL + "'></div>" +
+      "<details class='kadvanced'><summary>Coding brain (Ollama)</summary>" +
+      "<p>Pull a coding model — Terminus auto-uses the best installed one, so this becomes her brain once it's downloaded (needs free RAM).</p>" +
+      "<div class='field'><input id='kModelInput' type='text' autocomplete='off' placeholder='qwen2.5-coder:3b'></div>" +
+      "<div class='btnrow'><button id='kPullBtn' class='btn' type='button'>Pull model in Termux</button></div>" +
+      "</details></div>";
+
+    var urlInput = document.getElementById("kUrlInput");
+    urlInput.value = localStorage.getItem(KURL_KEY) || "";
+    urlInput.addEventListener("change", function () {
+      var v = this.value.trim();
+      if (v) localStorage.setItem(KURL_KEY, v); else localStorage.removeItem(KURL_KEY);
+      kStatus("Server URL saved. Tap PING to test.", "");
+    });
+
+    var modelInput = document.getElementById("kModelInput");
+    modelInput.value = localStorage.getItem(KMODEL_KEY) || "";
+
+    document.getElementById("kPingBtn").onclick = kPing;
+    document.getElementById("kStartBtn").onclick = function () {
+      bridge.run(K_START, false);
+      bridge.toast("Starting Kortana… give her ~15s, then PING.");
+      kStatus("Starting her brains + server in Termux… wait ~15s, then tap PING.", "");
+    };
+    document.getElementById("kStopBtn").onclick = function () {
+      bridge.run("pkill -f 'node index.js'", true); bridge.toast("Stopped Terminus (brains left running).");
+      kStatus("Sent stop to Terminus.", "");
+    };
+    document.getElementById("kRestartBtn").onclick = function () {
+      bridge.run("pkill -f 'node index.js'; sleep 1; " + K_START, false);
+      bridge.toast("Restarting Terminus…"); kStatus("Restarting Terminus… wait ~15s, then PING.", "");
+    };
+    document.getElementById("kTermuxBtn").onclick = function () { bridge.openTermux(); };
+    document.getElementById("kPullBtn").onclick = function () {
+      var m = (document.getElementById("kModelInput").value || "").trim() || "qwen2.5-coder:3b";
+      localStorage.setItem(KMODEL_KEY, m);
+      bridge.run("ollama pull " + m, false);
+      bridge.toast("Pulling " + m + " in Termux…");
+    };
+
+    renderKChat();
+    kPing();   // auto-check reachability on open
+  }
+
   /* ---------- Navigation ---------- */
   function switchView(name) {
     var views = document.querySelectorAll(".view");
@@ -1023,6 +1201,7 @@
     if (name === "servers") renderServers();
     if (name === "learn") renderLessons();
     if (name === "help") renderHelp();
+    if (name === "kortana") { renderKortana(); document.getElementById("kInput").focus(); }
     if (name === "terminal") document.getElementById("cmdInput").focus();
   }
 
@@ -1084,6 +1263,12 @@
     if (exToggle) exToggle.addEventListener("change", function () {
       try { localStorage.setItem(PERSIST.explain, this.checked ? "1" : "0"); } catch (e) {}
     });
+
+    // Kortana chat input
+    var kSendBtn = document.getElementById("kSendBtn");
+    if (kSendBtn) kSendBtn.onclick = kSend;
+    var kInput = document.getElementById("kInput");
+    if (kInput) kInput.addEventListener("keydown", function (e) { if (e.key === "Enter") kSend(); });
 
     // nav
     var navBtns = document.querySelectorAll("nav button");
