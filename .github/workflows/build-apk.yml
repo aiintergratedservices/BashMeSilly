@@ -1,8 +1,9 @@
 name: Build APK
 
-# Builds a sideloadable debug APK from the Android project in twa-app/.
-# Download the artifact from the run's "Artifacts" section and install it on
-# your phone (enable "install unknown apps" for your browser/file manager).
+# Builds a sideloadable debug APK from the Android project in twa-app/ and
+# publishes it as a GitHub Release with a direct, no-login download link — so a
+# new build reaches your phone in one tap (no GitHub login, no unzipping).
+# The artifact upload is kept too, for logged-in developers.
 
 on:
   push:
@@ -11,10 +12,15 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+permissions:
+  contents: write   # needed to publish the APK as a Release
+
 jobs:
   build-apk:
     name: Build sideloadable debug APK
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -32,6 +38,17 @@ jobs:
         run: |
           yes | sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" >/dev/null
 
+      # Make every build a unique, installable upgrade. Android refuses to
+      # "update" an install unless versionCode increases, so derive it from the
+      # run number. The base versionName is preserved and suffixed with the run.
+      - name: Bump versionCode for this build
+        working-directory: twa-app
+        run: |
+          BASE_NAME=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle | head -1)
+          sed -i "s/versionCode .*/versionCode ${GITHUB_RUN_NUMBER}/" app/build.gradle
+          sed -i "s/versionName \".*\"/versionName \"${BASE_NAME}+build.${GITHUB_RUN_NUMBER}\"/" app/build.gradle
+          echo "Built as versionCode=${GITHUB_RUN_NUMBER}, versionName=${BASE_NAME}+build.${GITHUB_RUN_NUMBER}"
+
       - name: Make gradlew executable
         run: chmod +x twa-app/gradlew
 
@@ -45,3 +62,24 @@ jobs:
           name: terminalapi-debug-apk
           path: twa-app/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      # Publish a Release only for pushes to the main line (not PRs / feature
+      # branches), so the "latest" download link always tracks shipped code.
+      - name: Publish APK as a GitHub Release (one-tap phone install)
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        run: |
+          TAG="apk-build-${GITHUB_RUN_NUMBER}"
+          cp twa-app/app/build/outputs/apk/debug/app-debug.apk "terminalapi-${TAG}.apk"
+          gh release create "$TAG" \
+            --title "Terminalapi APK build #${GITHUB_RUN_NUMBER}" \
+            --notes "Sideloadable debug APK from ${GITHUB_SHA}.
+
+          Install on your phone: open this release on the phone, tap the .apk
+          below to download, then open it to install (enable 'install unknown
+          apps' for your browser/file manager first). Installs over any earlier
+          build — no need to uninstall.
+
+          The 'latest' link always points at the newest build:
+          https://github.com/${GITHUB_REPOSITORY}/releases/latest" \
+            "terminalapi-${TAG}.apk"
+          echo "Direct download: https://github.com/${GITHUB_REPOSITORY}/releases/latest"
