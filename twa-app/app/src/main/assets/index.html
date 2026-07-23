@@ -1,3 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- Without this, the WebView renders at a 980px desktop viewport and shrinks
+       the whole UI ("not scaled correctly"). width=device-width fixes scaling;
+       viewport-fit=cover lets the layout extend under notches/rounded corners. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!-- The theme is dark; tell the UA so form controls/scrollbars match. -->
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#141926">
+  <title>Terminalapi</title>
+  <!-- This stylesheet was never linked before, so the app rendered as raw
+       unstyled black-on-white HTML. Loading it restores the neon dark theme. -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
 <div id="app">
   <header>
     <span class="logo" aria-hidden="true">
@@ -101,3 +118,5 @@
 </div>
 
 <script src="app.js"></script>
+</body>
+</html>
