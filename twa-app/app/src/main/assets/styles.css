@@ -246,3 +246,37 @@ nav button.active::before {
   content: ""; position: absolute; top: 0; width: 28px; height: 3px; border-radius: 0 0 4px 4px;
   background: var(--grad); box-shadow: 0 0 12px rgba(139,124,255,.9);
 }
+
+/* Completed lessons — subtle mint accent (offline progress tracking). */
+.card.lesson-done { border-color: rgba(94,234,212,.4); }
+.card.lesson-done h3 { color: var(--mint); }
+
+/* ---------- Kortana chat tab ---------- */
+#view-kortana { flex-direction: column; }
+#kortanaBanner { flex: 0 0 auto; padding: 14px 14px 0; }
+#kchat {
+  flex: 1 1 auto; min-height: 120px; overflow-y: auto;
+  padding: 12px 14px 6px; display: flex; flex-direction: column;
+}
+.kmsg { margin: 7px 0; max-width: 88%; }
+.kmsg.me { align-self: flex-end; text-align: right; }
+.kmsg.her { align-self: flex-start; }
+.kwho { font-size: 11px; color: var(--faint); margin-bottom: 3px; }
+.kcore { font-family: var(--mono); font-size: 10px; color: var(--violet-lite); opacity: .85; }
+.ktext {
+  display: inline-block; padding: 9px 12px; border-radius: 14px;
+  font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; text-align: left;
+}
+.kmsg.her .ktext { background: var(--surface-2); border: 1px solid var(--line-soft); color: var(--fg); border-top-left-radius: 4px; }
+.kmsg.me .ktext { background: var(--grad); color: #150a2e; border-top-right-radius: 4px; }
+.kmsg.thinking .ktext { opacity: .55; }
+.kstatus {
+  font-size: 12.5px; padding: 8px 11px; border-radius: 9px; margin-bottom: 10px; line-height: 1.5;
+  background: rgba(139,124,255,.08); border: 1px solid var(--line-soft); color: var(--muted);
+}
+.kstatus.ok { color: var(--mint); border-color: rgba(94,234,212,.4); }
+.kstatus.err { color: var(--pink); border-color: rgba(255,107,157,.4); }
+.kstatus.warn { color: #ffe0a0; border-color: rgba(255,207,107,.4); }
+.kcontrols .btnrow { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.kadvanced { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.kadvanced summary { cursor: pointer; color: var(--violet-lite); padding: 4px 0; }

@@ -19,8 +19,13 @@ jobs:
   build-apk:
     name: Build sideloadable debug APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30   # a genuine hang fails fast instead of burning the 6h ceiling
     env:
       GH_TOKEN: ${{ github.token }}
+      # Belt-and-suspenders anti-hang: force these even if gradle.properties is
+      # ever reverted. TERM=dumb + CI=true stop any interactive/animated output.
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false"
+      TERM: dumb
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -54,7 +59,14 @@ jobs:
 
       - name: Build debug APK
         working-directory: twa-app
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          # The flags are the hang fix:
+          #   --no-daemon      never leave a background JVM holding the pipe open
+          #   --console=plain  no animated console to stall on a non-TTY
+          #   --no-watch-fs    no filesystem watcher to hang in the sandbox
+          # `timeout 20m` makes a stuck build fail promptly with a clear signal.
+          timeout 20m ./gradlew assembleDebug \
+            --no-daemon --console=plain --no-watch-fs --stacktrace
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
