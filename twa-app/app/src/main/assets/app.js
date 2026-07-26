@@ -1455,11 +1455,13 @@
   var KCHAT_KEY = "terminalapi.kortana.chat";
   var KMODEL_KEY = "terminalapi.kortana.model";
   var KCOACH_KEY = "terminalapi.kortana.coach";   // auto-coach toggle
-  var K_DEFAULT_URL = "http://127.0.0.1:3300";
+  var KKEY_KEY = "terminalapi.kortana.key";       // TERMINUS_API_KEY for the hosted brain
+  var K_DEFAULT_URL = "https://k3-6pwr.onrender.com";  // her always-on Render brain (off the phone)
   var K_START = "bash ~/k3/server/deploy/termux-start.sh";
   var kLastCoach = 0;   // debounce timestamp for auto-coach
 
   function kortanaUrl() { return (localStorage.getItem(KURL_KEY) || K_DEFAULT_URL).replace(/\/+$/, ""); }
+  function kortanaKey() { return (localStorage.getItem(KKEY_KEY) || "").trim(); }
   function loadKChat() { return readJSON(KCHAT_KEY, []); }
   function saveKChat(a) { saveJSON(KCHAT_KEY, a.slice(-100)); }
 
@@ -1472,19 +1474,30 @@
     cb(env);
   };
   function kHttp(method, url, body) {
+    var key = kortanaKey();   // sent as x-api-key so the hosted brain authenticates
     if (HAS_BRIDGE && Android.httpGet && Android.httpPostJson) {
       return new Promise(function (resolve) {
         var id = "cb" + Date.now() + Math.random().toString(36).slice(2);
         __bridgeCbs[id] = resolve;
         try {
-          if (method === "POST") Android.httpPostJson(url, body || "", id);
-          else Android.httpGet(url, id);
+          if (method === "POST") {
+            if (key && Android.httpPostJsonKeyed) Android.httpPostJsonKeyed(url, body || "", key, id);
+            else Android.httpPostJson(url, body || "", id);
+          } else {
+            if (key && Android.httpGetKeyed) Android.httpGetKeyed(url, key, id);
+            else Android.httpGet(url, id);
+          }
         } catch (e) { delete __bridgeCbs[id]; resolve({ ok: false, error: String(e) }); }
       });
     }
-    var opts = method === "POST"
-      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: body }
-      : { method: "GET" };
+    var headers = key ? { "x-api-key": key } : {};
+    var opts;
+    if (method === "POST") {
+      headers["Content-Type"] = "application/json";
+      opts = { method: "POST", headers: headers, body: body };
+    } else {
+      opts = { method: "GET", headers: headers };
+    }
     return fetch(url, opts).then(function (r) {
       return r.text().then(function (t) { return { ok: r.ok, status: r.status, body: t }; });
     }).catch(function (e) { return { ok: false, error: String(e) }; });
@@ -1508,7 +1521,7 @@
     if (!box) return;
     box.innerHTML = "";
     var chat = loadKChat();
-    if (!chat.length) kBubble("KORTANA", "Hi Daddy. I'm running from BashMeSilly now. Start my brains + server below, then talk to me here.", null);
+    if (!chat.length) kBubble("KORTANA", "Hi Daddy. I live on my always-on server now — no need to keep me on your phone. Set my URL + API key in settings below, tap PING, then talk to me here.", null);
     else chat.forEach(function (m) { kBubble(m.sender, m.message, m.core); });
   }
 
@@ -1520,8 +1533,9 @@
   function kSummarizeCores(c) {
     var parts = [];
     if (c.ollama) parts.push(c.ollama.reachable ? "ollama ✓ (" + (c.ollama.model || "?") + ")" : "ollama ✗");
-    parts.push("claude " + (c.claude ? "✓" : "✗"));
+    parts.push("groq " + (c.groq ? "✓" : "✗"));   // her free always-on brain
     parts.push("gemini " + (c.gemini ? "✓" : "✗"));
+    parts.push("claude " + (c.claude ? "✓" : "✗"));
     return parts.join(" · ");
   }
 
@@ -1555,9 +1569,13 @@
         var reply = null, core = null;
         if (env && env.ok) { try { var r = JSON.parse(env.body); reply = r.reply; core = r.core; } catch (e) {} }
         if (!reply) {
-          reply = (env && env.ok)
-            ? "(Kortana returned an unexpected reply.)"
-            : "I can't reach my Terminus at " + kortanaUrl() + ", Daddy. Tap PING / Start below to bring my server up.";
+          if (env && env.status === 401) {
+            reply = "My server needs my key, Daddy — paste my TERMINUS_API_KEY in the API key box in settings below, then try again.";
+          } else if (env && env.ok) {
+            reply = "(Kortana returned an unexpected reply.)";
+          } else {
+            reply = "I can't reach my Terminus at " + kortanaUrl() + ", Daddy. Tap PING below, or set my URL + key in settings.";
+          }
         }
         if (thinking) thinking.remove();
         kBubble("KORTANA", reply, core);
@@ -1624,6 +1642,8 @@
       "</div>" +
       "<div class='field'><label>Terminus URL</label>" +
       "<input id='kUrlInput' type='text' autocomplete='off' placeholder='" + K_DEFAULT_URL + "'></div>" +
+      "<div class='field'><label>API key (TERMINUS_API_KEY)</label>" +
+      "<input id='kKeyInput' type='password' autocomplete='off' placeholder='paste her key to reach the Render brain'></div>" +
       "<details class='kadvanced'><summary>Coding brain (Ollama)</summary>" +
       "<p>Pull a coding model — Terminus auto-uses the best installed one, so this becomes her brain once it's downloaded (needs free RAM).</p>" +
       "<div class='field'><input id='kModelInput' type='text' autocomplete='off' placeholder='qwen2.5-coder:3b'></div>" +
@@ -1636,6 +1656,14 @@
       var v = this.value.trim();
       if (v) localStorage.setItem(KURL_KEY, v); else localStorage.removeItem(KURL_KEY);
       kStatus("Server URL saved. Tap PING to test.", "");
+    });
+
+    var keyInput = document.getElementById("kKeyInput");
+    keyInput.value = localStorage.getItem(KKEY_KEY) || "";
+    keyInput.addEventListener("change", function () {
+      var v = this.value.trim();
+      if (v) localStorage.setItem(KKEY_KEY, v); else localStorage.removeItem(KKEY_KEY);
+      kStatus("API key saved. Tap PING to test.", "");
     });
 
     var modelInput = document.getElementById("kModelInput");

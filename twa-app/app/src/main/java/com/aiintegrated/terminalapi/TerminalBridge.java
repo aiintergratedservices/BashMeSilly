@@ -62,15 +62,27 @@ public class TerminalBridge {
      * to JS via window.__bridgeResolve(callbackId, envelopeJson). */
     @JavascriptInterface
     public void httpPostJson(final String url, final String body, final String callbackId) {
-        new Thread(() -> deliver(callbackId, doRequest("POST", url, body, 180000))).start();
+        new Thread(() -> deliver(callbackId, doRequest("POST", url, body, 180000, null))).start();
     }
 
     @JavascriptInterface
     public void httpGet(final String url, final String callbackId) {
-        new Thread(() -> deliver(callbackId, doRequest("GET", url, null, 8000))).start();
+        new Thread(() -> deliver(callbackId, doRequest("GET", url, null, 8000, null))).start();
     }
 
-    private String doRequest(String method, String urlStr, String body, int readTimeoutMs) {
+    /* Keyed variants — attach x-api-key so calls to Kortana's Terminus
+     * authenticate when it's hosted with a TERMINUS_API_KEY (e.g. on Render). */
+    @JavascriptInterface
+    public void httpPostJsonKeyed(final String url, final String body, final String apiKey, final String callbackId) {
+        new Thread(() -> deliver(callbackId, doRequest("POST", url, body, 180000, apiKey))).start();
+    }
+
+    @JavascriptInterface
+    public void httpGetKeyed(final String url, final String apiKey, final String callbackId) {
+        new Thread(() -> deliver(callbackId, doRequest("GET", url, null, 8000, apiKey))).start();
+    }
+
+    private String doRequest(String method, String urlStr, String body, int readTimeoutMs, String apiKey) {
         HttpURLConnection conn = null;
         try {
             URL url = new URL(urlStr);
@@ -79,6 +91,7 @@ public class TerminalBridge {
             conn.setConnectTimeout(5000);
             conn.setReadTimeout(readTimeoutMs);
             conn.setRequestProperty("Accept", "application/json");
+            if (apiKey != null && !apiKey.isEmpty()) conn.setRequestProperty("x-api-key", apiKey);
             if (body != null && !"GET".equals(method)) {
                 conn.setDoOutput(true);
                 conn.setRequestProperty("Content-Type", "application/json");
