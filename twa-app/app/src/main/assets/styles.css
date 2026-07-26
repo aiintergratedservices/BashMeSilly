@@ -246,3 +246,106 @@ nav button.active::before {
   content: ""; position: absolute; top: 0; width: 28px; height: 3px; border-radius: 0 0 4px 4px;
   background: var(--grad); box-shadow: 0 0 12px rgba(139,124,255,.9);
 }
+
+/* Completed lessons — subtle mint accent (offline progress tracking). */
+.card.lesson-done { border-color: rgba(94,234,212,.4); }
+.card.lesson-done h3 { color: var(--mint); }
+
+/* ---------- Kortana chat tab ---------- */
+#view-kortana { flex-direction: column; }
+#kortanaBanner { flex: 0 0 auto; padding: 14px 14px 0; }
+#kchat {
+  flex: 1 1 auto; min-height: 120px; overflow-y: auto;
+  padding: 12px 14px 6px; display: flex; flex-direction: column;
+}
+.kmsg { margin: 7px 0; max-width: 88%; }
+.kmsg.me { align-self: flex-end; text-align: right; }
+.kmsg.her { align-self: flex-start; }
+.kwho { font-size: 11px; color: var(--faint); margin-bottom: 3px; }
+.kcore { font-family: var(--mono); font-size: 10px; color: var(--violet-lite); opacity: .85; }
+.ktext {
+  display: inline-block; padding: 9px 12px; border-radius: 14px;
+  font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; text-align: left;
+}
+.kmsg.her .ktext { background: var(--surface-2); border: 1px solid var(--line-soft); color: var(--fg); border-top-left-radius: 4px; }
+.kmsg.me .ktext { background: var(--grad); color: #150a2e; border-top-right-radius: 4px; }
+.kmsg.thinking .ktext { opacity: .55; }
+.kstatus {
+  font-size: 12.5px; padding: 8px 11px; border-radius: 9px; margin-bottom: 10px; line-height: 1.5;
+  background: rgba(139,124,255,.08); border: 1px solid var(--line-soft); color: var(--muted);
+}
+.kstatus.ok { color: var(--mint); border-color: rgba(94,234,212,.4); }
+.kstatus.err { color: var(--pink); border-color: rgba(255,107,157,.4); }
+.kstatus.warn { color: #ffe0a0; border-color: rgba(255,207,107,.4); }
+.kcontrols .btnrow { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.kadvanced { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.kadvanced summary { cursor: pointer; color: var(--violet-lite); padding: 4px 0; }
+
+/* ============ Learn tab redesign (tracks + progress ring) ============ */
+.progress-hero {
+  display: flex; align-items: center; gap: 15px;
+  background: linear-gradient(135deg, rgba(139,124,255,.16), rgba(209,107,255,.08));
+  border: 1px solid rgba(139,124,255,.4);
+  border-radius: 16px; padding: 15px 16px; margin-bottom: 16px;
+  box-shadow: 0 0 28px -12px rgba(139,124,255,.7);
+}
+.ring-wrap { position: relative; width: 60px; height: 60px; flex: 0 0 60px; }
+.ring { width: 60px; height: 60px; transform: rotate(-90deg); }
+.ring-bg { fill: none; stroke: rgba(255,255,255,.08); stroke-width: 6; }
+.ring-fg { fill: none; stroke: url(#g); stroke: var(--violet-lite); stroke-width: 6;
+  stroke-linecap: round; transition: stroke-dashoffset .6s ease;
+  filter: drop-shadow(0 0 5px rgba(182,169,255,.8)); }
+.ring-pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--violet-lite); }
+.hero-num { font-size: 20px; font-weight: 800; color: var(--fg); letter-spacing: .3px; }
+.hero-sub { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+
+.track {
+  border: 1px solid var(--line-soft); border-radius: 14px; margin-bottom: 11px;
+  background: linear-gradient(180deg, var(--surface), var(--bg-2)); overflow: hidden;
+}
+.track-done { border-color: rgba(94,234,212,.35); }
+.track-head {
+  display: flex; align-items: center; gap: 11px; width: 100%;
+  padding: 13px 14px; background: transparent; border: 0; cursor: pointer;
+  color: var(--fg); text-align: left; font: inherit;
+}
+.track-head:active { filter: brightness(1.1); }
+.track-ic { font-size: 20px; flex: 0 0 auto; }
+.track-name { flex: 1; font-size: 15px; font-weight: 700; display: flex; flex-direction: column; }
+.track-name small { font-size: 11.5px; font-weight: 500; color: var(--muted); margin-top: 2px; }
+.track-count {
+  font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--violet-lite);
+  background: rgba(139,124,255,.14); border: 1px solid rgba(139,124,255,.35);
+  padding: 3px 9px; border-radius: 999px;
+}
+.track-done .track-count { color: var(--mint); background: rgba(94,234,212,.12); border-color: rgba(94,234,212,.4); }
+.track-chev { color: var(--faint); font-size: 20px; transition: transform .25s ease; flex: 0 0 auto; }
+.track.open .track-chev { transform: rotate(90deg); }
+
+.track-body { max-height: 0; overflow: hidden; transition: max-height .35s ease; }
+.track.open .track-body { max-height: 1600px; }
+.lesson-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 14px; border-top: 1px solid var(--line-soft);
+}
+.lesson-check { font-family: var(--mono); font-size: 15px; color: var(--faint); flex: 0 0 auto; width: 16px; text-align: center; }
+.lesson-row.done .lesson-check { color: var(--mint); }
+.lesson-info { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.lesson-info b { font-size: 14px; font-weight: 600; color: var(--fg); }
+.lesson-row.done .lesson-info b { color: var(--mint); }
+.lesson-info small { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.lesson-go {
+  flex: 0 0 auto; background: var(--grad); color: #150a2e; border: 0;
+  border-radius: 9px; padding: 7px 15px; font-weight: 700; font-size: 13px; cursor: pointer;
+  box-shadow: var(--glow-soft); min-width: 60px;
+}
+.lesson-row.done .lesson-go {
+  background: transparent; color: var(--violet-lite);
+  border: 1px solid rgba(139,124,255,.4); box-shadow: none; font-size: 16px;
+}
+.lesson-go:active { transform: translateY(1px); filter: brightness(1.1); }
+
+/* Coach toggle (Kortana watches & guides as you work) */
+.kcoach-toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+.kcoach-toggle input { width: 16px; height: 16px; accent-color: var(--violet); }

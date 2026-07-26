@@ -45,7 +45,18 @@
     grep:  { sum: "Search for text inside a file.", usage: "grep <text> <file>",
              flags: { "-i": "case-insensitive search" } },
     head:  { sum: "Show the first lines of a file.", usage: "head <file>", flags: {} },
-    tail:  { sum: "Show the last lines of a file.", usage: "tail <file>", flags: {} },
+    tail:  { sum: "Show the last lines of a file.", usage: "tail [-n N] <file>", flags: { "-n": "how many lines to show" } },
+    wc:    { sum: "Count lines, words, and characters in a file.", usage: "wc [-l|-w|-c] <file>",
+             flags: { "-l": "count lines only", "-w": "count words only", "-c": "count characters only" } },
+    sort:  { sum: "Sort the lines of a file.", usage: "sort [-r] [-n] <file>",
+             flags: { "-r": "reverse order", "-n": "numeric sort" } },
+    uniq:  { sum: "Collapse adjacent duplicate lines (sort first!).", usage: "uniq [-c] <file>",
+             flags: { "-c": "show a count next to each line" } },
+    find:  { sum: "Search for files/folders by name, from here downward.", usage: "find . -name <pattern>",
+             flags: { "-name": "match filenames (use * as a wildcard)" } },
+    chmod: { sum: "Change a file's permissions (who can read/write/run it).", usage: "chmod <mode> <file>",
+             flags: { "+x": "make it executable", "755": "owner all, others read+run" } },
+    which: { sum: "Show the path of a command.", usage: "which <command>", flags: {} },
     whoami:{ sum: "Print your username.", usage: "whoami", flags: {} },
     date:  { sum: "Show the current date and time.", usage: "date", flags: {} },
     clear: { sum: "Clear the screen.", usage: "clear", flags: {} },
@@ -104,9 +115,14 @@
   function freshFS() {
     return {
       "projects": {
-        "hello": { "README.md": "# Hello\nA tiny practice project.\n", "app.js": "console.log('hi');\n" }
+        "hello": { "README.md": "# Hello\nA tiny practice project.\n", "app.js": "console.log('hi');\n" },
+        "site":  { "index.html": "<h1>Hi</h1>\n", "style.css": "body{margin:0}\n" }
       },
-      "notes.txt": "Buy milk\nLearn bash\nShip the app\n",
+      "notes.txt": "Buy milk\nLearn bash\nShip the app\nCall mom\nBuy milk again\n",
+      "fruits.txt": "banana\napple\ncherry\napple\ndate\nbanana\napple\n",
+      "log.txt": "INFO server started\nWARN low disk\nERROR db timeout\nINFO request ok\nERROR db timeout\nWARN low disk\n",
+      "poem.txt": "roses are red\nviolets are blue\nbash is fun\nand so are you\n",
+      "readme.md": "# Sandbox\nA safe place to practice.\n\n## Files\n- notes.txt\n- log.txt\n",
       ".secret": "you found a hidden file!\n"
     };
   }
@@ -114,6 +130,59 @@
   var cwd = ["~"];              // path segments; "~" is home
   var history = [];
   var histIdx = -1;
+
+  /* ---------- Offline session persistence ----------
+   * The sandbox filesystem, command history, lesson progress, the Explain
+   * toggle, and the on-screen transcript all survive app restarts via
+   * localStorage — so your offline work is never lost. Everything here is
+   * local-only: no network, works fully offline. */
+  var PERSIST = {
+    fs:       "terminalapi.fs",       // sandbox filesystem + current directory
+    history:  "terminalapi.history",  // command history (recalled with up/down)
+    progress: "terminalapi.progress", // completed lesson ids
+    explain:  "terminalapi.explain",  // Explain-mode toggle state
+    screen:   "terminalapi.screen"    // last session transcript (resume on launch)
+  };
+  var HISTORY_CAP = 300;   // keep the last N commands
+  var SCREEN_CAP = 300;    // keep the last N transcript lines
+
+  function saveJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  function readJSON(k, dflt) {
+    try { var v = JSON.parse(localStorage.getItem(k)); return v == null ? dflt : v; }
+    catch (e) { return dflt; }
+  }
+
+  function persistSandbox() { saveJSON(PERSIST.fs, { fs: fs, cwd: cwd }); }
+  function persistHistory() { saveJSON(PERSIST.history, history.slice(-HISTORY_CAP)); }
+  function persistScreen() {
+    if (!screen) return;
+    while (screen.children.length > SCREEN_CAP) screen.removeChild(screen.firstChild);
+    try { localStorage.setItem(PERSIST.screen, screen.innerHTML); } catch (e) {}
+  }
+  function persistSession() { persistSandbox(); persistHistory(); persistScreen(); }
+
+  function loadProgress() { return readJSON(PERSIST.progress, {}); }
+  function markLessonComplete(id) { var p = loadProgress(); p[id] = true; saveJSON(PERSIST.progress, p); }
+
+  /* Restore saved state on launch. Returns the previous transcript HTML (if any)
+   * so init() can replay the session instead of showing the welcome banner. */
+  function restoreSession() {
+    var s = readJSON(PERSIST.fs, null);
+    if (s && s.fs && typeof s.fs === "object") {
+      fs = s.fs;
+      cwd = (s.cwd && s.cwd.length) ? s.cwd : ["~"];
+    }
+    var h = readJSON(PERSIST.history, null);
+    if (h && h.length) { history = h; histIdx = history.length; }
+    var ex = null;
+    try { ex = localStorage.getItem(PERSIST.explain); } catch (e) {}
+    if (ex === "1") { var t = document.getElementById("explainToggle"); if (t) t.checked = true; }
+    var prev = null;
+    try { prev = localStorage.getItem(PERSIST.screen); } catch (e) {}
+    return prev;
+  }
+
+  function resetSandbox() { fs = freshFS(); cwd = ["~"]; persistSandbox(); }
 
   /* navigate to a directory node given cwd (excluding leading ~) */
   function nodeAt(segs) {
@@ -180,6 +249,9 @@
     // lesson interception
     if (lesson.active) { lessonHandle(line); }
     else dispatch(line);
+
+    persistSession();   // save sandbox + history + transcript after every command
+    if (autoCoachEnabled()) kCoach(false);   // let Kortana watch & guide as you work
   }
 
   function dispatch(line) {
@@ -200,12 +272,25 @@
       case "touch": doTouch(args); break;
       case "rm": doRm(args); break;
       case "tree": doTree(); break;
+      case "cp": doCp(args); break;
+      case "mv": doMv(args); break;
+      case "grep": doGrep(args, line); break;
+      case "head": doHeadTail("head", args); break;
+      case "tail": doHeadTail("tail", args); break;
+      case "wc": doWc(args); break;
+      case "sort": doSort(args); break;
+      case "uniq": doUniq(args); break;
+      case "find": doFind(args); break;
+      case "chmod": doChmod(args); break;
+      case "which": doWhich(args); break;
       case "whoami": out("learner"); break;
       case "date": out(new Date().toString()); break;
       case "man": doMan(args); break;
       case "explain": explain(args.length ? args : []); if (!args.length) out("Usage: explain <command>", "err"); break;
       case "history": history.forEach(function (h, i) { out(("  " + (i + 1)).slice(-4) + "  " + h); }); break;
       case "learn": switchView("learn"); out("Opening the Learn tab — pick a lesson.", "sys"); break;
+      case "sessions": doSessions(); break;
+      case "reset": resetSandbox(); out("Sandbox filesystem reset to a fresh state.", "ok"); break;
       case "termux":
         if (!args.length) { out("Usage: termux <command to run in Termux>", "err"); break; }
         var real = line.slice(line.indexOf("termux") + 7);
@@ -557,6 +642,10 @@
     out("Practice commands (safe sandbox):", "sys");
     out("  pwd  ls  cd  cat  echo  mkdir  touch  rm  cp  mv  tree  grep  head  tail");
     out("  whoami  date  history  man <cmd>  clear");
+    out("  wc  sort  uniq  find  chmod  which     (text & file power tools)");
+    out("Your offline session (saved on this device):", "sys");
+    out("  sessions         show what's saved (history, progress, files)");
+    out("  reset            wipe the sandbox filesystem back to fresh");
     out("Learning:", "sys");
     out("  learn            open the guided lessons");
     out("  explain <cmd>    describe a command without running it");
@@ -577,90 +666,330 @@
     out("  wakelock on|off  keep the CPU awake for servers");
   }
 
+  function doSessions() {
+    var progress = loadProgress();
+    var done = LESSONS.filter(function (l) { return progress[l.id]; }).length;
+    var fileCount = 0;
+    (function count(node) {
+      Object.keys(node).forEach(function (k) {
+        if (isDir(node[k])) count(node[k]); else fileCount++;
+      });
+    })(fs);
+    out("Your offline session", "sys");
+    out("  Commands in history : " + history.length);
+    out("  Lessons complete    : " + done + " / " + LESSONS.length);
+    out("  Files in sandbox    : " + fileCount);
+    out("  Saved servers       : " + loadServers().length);
+    out("Everything is stored on THIS device and works with no internet.", "ok");
+    out("Type 'reset' to wipe the sandbox filesystem back to fresh.", "sys");
+  }
+
+  /* ---------- More core commands (sandbox) ---------- */
+  function resolveFile(name) {
+    var dir = curDir();
+    if (dir[name] === undefined) return { err: "No such file: " + name };
+    if (isDir(dir[name])) return { err: name + ": Is a directory" };
+    return { text: dir[name] };
+  }
+
+  function doCp(args) {
+    var recursive = args.indexOf("-r") !== -1 || args.indexOf("-R") !== -1;
+    var rest = args.filter(function (a) { return a[0] !== "-"; });
+    if (rest.length < 2) { out("Usage: cp [-r] <src> <dest>", "err"); return; }
+    var dir = curDir(), src = rest[0], dest = rest[1];
+    if (dir[src] === undefined) { out("cp: " + src + ": No such file", "err"); return; }
+    if (isDir(dir[src]) && !recursive) { out("cp: " + src + " is a directory (use -r)", "err"); return; }
+    dir[dest] = JSON.parse(JSON.stringify(dir[src]));
+    out("copied " + src + " -> " + dest, "ok");
+  }
+
+  function doMv(args) {
+    var rest = args.filter(function (a) { return a[0] !== "-"; });
+    if (rest.length < 2) { out("Usage: mv <src> <dest>", "err"); return; }
+    var dir = curDir(), src = rest[0], dest = rest[1];
+    if (dir[src] === undefined) { out("mv: " + src + ": No such file", "err"); return; }
+    dir[dest] = dir[src];
+    delete dir[src];
+    out("moved " + src + " -> " + dest, "ok");
+  }
+
+  function doGrep(args, line) {
+    var ci = args.indexOf("-i") !== -1;
+    var inv = args.indexOf("-v") !== -1;
+    var cnt = args.indexOf("-c") !== -1;
+    var rest = args.filter(function (a) { return a[0] !== "-"; });
+    if (rest.length < 2) { out("Usage: grep [-i] [-v] [-c] <text> <file>", "err"); return; }
+    var pat = rest[0], fname = rest[1];
+    var r = resolveFile(fname);
+    if (r.err) { out("grep: " + r.err, "err"); return; }
+    var p = ci ? pat.toLowerCase() : pat;
+    var lines = r.text.replace(/\n$/, "").split("\n");
+    var hits = lines.filter(function (ln) {
+      var hay = ci ? ln.toLowerCase() : ln;
+      var found = hay.indexOf(p) !== -1;
+      return inv ? !found : found;
+    });
+    if (cnt) { out(String(hits.length)); return; }
+    if (!hits.length) { out("(no matches)", "sys"); return; }
+    hits.forEach(function (ln) {
+      if (!ci && !inv) { out(ln.split(pat).join("[" + pat + "]")); }
+      else out(ln);
+    });
+  }
+
+  function doHeadTail(which, args) {
+    var n = 10;
+    var ni = args.indexOf("-n");
+    if (ni !== -1 && args[ni + 1]) n = parseInt(args[ni + 1], 10) || 10;
+    var rest = args.filter(function (a) { return a[0] !== "-" && !/^\d+$/.test(a); });
+    var fname = rest[0];
+    if (!fname) { out("Usage: " + which + " [-n N] <file>", "err"); return; }
+    var r = resolveFile(fname);
+    if (r.err) { out(which + ": " + r.err, "err"); return; }
+    var lines = r.text.replace(/\n$/, "").split("\n");
+    var pick = which === "head" ? lines.slice(0, n) : lines.slice(-n);
+    pick.forEach(function (ln) { out(ln); });
+  }
+
+  function doWc(args) {
+    var mode = args.filter(function (a) { return a[0] === "-"; })[0];
+    var fname = args.filter(function (a) { return a[0] !== "-"; })[0];
+    if (!fname) { out("Usage: wc [-l|-w|-c] <file>", "err"); return; }
+    var r = resolveFile(fname);
+    if (r.err) { out("wc: " + r.err, "err"); return; }
+    var txt = r.text;
+    var lc = txt.replace(/\n$/, "").split("\n").length;
+    var wcount = txt.trim() ? txt.trim().split(/\s+/).length : 0;
+    var cc = txt.length;
+    if (mode === "-l") out(String(lc) + " " + fname);
+    else if (mode === "-w") out(String(wcount) + " " + fname);
+    else if (mode === "-c") out(String(cc) + " " + fname);
+    else out("  " + lc + "  " + wcount + "  " + cc + "  " + fname);
+  }
+
+  function doSort(args) {
+    var rev = args.indexOf("-r") !== -1;
+    var num = args.indexOf("-n") !== -1;
+    var fname = args.filter(function (a) { return a[0] !== "-"; })[0];
+    if (!fname) { out("Usage: sort [-r] [-n] <file>", "err"); return; }
+    var r = resolveFile(fname);
+    if (r.err) { out("sort: " + r.err, "err"); return; }
+    var lines = r.text.replace(/\n$/, "").split("\n");
+    lines.sort(num ? function (a, b) { return parseFloat(a) - parseFloat(b); }
+                    : function (a, b) { return a < b ? -1 : a > b ? 1 : 0; });
+    if (rev) lines.reverse();
+    lines.forEach(function (ln) { out(ln); });
+  }
+
+  function doUniq(args) {
+    var cnt = args.indexOf("-c") !== -1;
+    var fname = args.filter(function (a) { return a[0] !== "-"; })[0];
+    if (!fname) { out("Usage: uniq [-c] <file>   (tip: sort first)", "err"); return; }
+    var r = resolveFile(fname);
+    if (r.err) { out("uniq: " + r.err, "err"); return; }
+    var lines = r.text.replace(/\n$/, "").split("\n");
+    var prev = null, run = 0, outLines = [];
+    lines.forEach(function (ln) {
+      if (ln === prev) { run++; }
+      else { if (prev !== null) outLines.push(cnt ? ("   " + run + " " + prev) : prev); prev = ln; run = 1; }
+    });
+    if (prev !== null) outLines.push(cnt ? ("   " + run + " " + prev) : prev);
+    outLines.forEach(function (l) { out(l); });
+  }
+
+  function doFind(args) {
+    var nameIdx = args.indexOf("-name");
+    var pattern = nameIdx !== -1 ? args[nameIdx + 1] : null;
+    var rx = pattern ? new RegExp("^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$") : null;
+    var base = curDir();
+    var results = [];
+    (function walk(node, path) {
+      Object.keys(node).forEach(function (k) {
+        var p = path + "/" + k;
+        if (!rx || rx.test(k)) results.push("." + p);
+        if (isDir(node[k])) walk(node[k], p);
+      });
+    })(base, "");
+    if (!results.length) { out("(nothing found)", "sys"); return; }
+    results.forEach(function (r) { out(r); });
+  }
+
+  function doChmod(args) {
+    var mode = args[0], fname = args[1];
+    if (!mode || !fname) { out("Usage: chmod <mode> <file>   e.g. chmod +x run.sh  or  chmod 755 run.sh", "err"); return; }
+    var dir = curDir();
+    if (dir[fname] === undefined) { out("chmod: " + fname + ": No such file", "err"); return; }
+    out("mode of '" + fname + "' changed to " + mode + " (simulated).", "ok");
+    if (/x/.test(mode) || /7|5|1|3/.test(mode)) out("It's now executable \u2014 you could run it with  ./" + fname, "sys");
+  }
+
+  function doWhich(args) {
+    var name = args[0];
+    if (!name) { out("Usage: which <command>", "err"); return; }
+    if (COMMANDS[name]) out("/usr/bin/" + name);
+    else out(name + " not found", "err");
+  }
+
   function escapeHTML(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
   /* ---------- Lessons ---------- */
   var LESSONS = [
-    { id: "nav", title: "1 · Where am I?", steps: [
+    { id: "nav", track: "Basics", title: "1 · Where am I?", steps: [
       { say: "Every shell has a \"current folder\". Type <b>pwd</b> to print it.", ok: function (c) { return c === "pwd"; }, hint: "Just type: pwd" },
       { say: "Now list what's in this folder. Type <b>ls</b>.", ok: function (c) { return c.split(" ")[0] === "ls"; }, hint: "Type: ls" },
       { say: "Hidden files start with a dot. Reveal them with <b>ls -a</b>.", ok: function (c) { return /^ls\s+-a/.test(c); }, hint: "Type: ls -a" }
     ]},
-    { id: "move", title: "2 · Moving around", steps: [
+    { id: "move", track: "Navigation", title: "2 · Moving around", steps: [
       { say: "There's a folder called <b>projects</b>. Enter it: <b>cd projects</b>.", ok: function (c) { return /^cd\s+projects/.test(c); }, hint: "Type: cd projects" },
       { say: "Look inside with <b>ls</b>.", ok: function (c) { return c.split(" ")[0] === "ls"; }, hint: "Type: ls" },
       { say: "Go back up one level with <b>cd ..</b>", ok: function (c) { return /^cd\s+\.\./.test(c); }, hint: "Type: cd .." }
     ]},
-    { id: "files", title: "3 · Reading & making files", steps: [
+    { id: "files", track: "Files", title: "3 · Reading & making files", steps: [
       { say: "Read the notes file: <b>cat notes.txt</b>.", ok: function (c) { return /^cat\s+notes\.txt/.test(c); }, hint: "Type: cat notes.txt" },
       { say: "Create an empty file: <b>touch todo.txt</b>.", ok: function (c) { return /^touch\s+todo\.txt/.test(c); }, hint: "Type: touch todo.txt" },
       { say: "Write into it: <b>echo hello &gt; todo.txt</b>.", ok: function (c) { return /^echo\s+.+>\s*todo\.txt/.test(c); }, hint: "Type: echo hello > todo.txt" },
       { say: "Check it worked: <b>cat todo.txt</b>.", ok: function (c) { return /^cat\s+todo\.txt/.test(c); }, hint: "Type: cat todo.txt" }
     ]},
-    { id: "folders", title: "4 · Folders & cleanup", steps: [
+    { id: "folders", track: "Files", title: "4 · Folders & cleanup", steps: [
       { say: "Make a folder: <b>mkdir sandbox</b>.", ok: function (c) { return /^mkdir\s+sandbox/.test(c); }, hint: "Type: mkdir sandbox" },
       { say: "See the whole tree: <b>tree</b>.", ok: function (c) { return c === "tree"; }, hint: "Type: tree" },
       { say: "Delete the folder: <b>rm -r sandbox</b>. (In real life, rm has no undo!)", ok: function (c) { return /^rm\s+-r\s+sandbox/.test(c); }, hint: "Type: rm -r sandbox" }
     ]},
+    /* ===== BASICS ===== */
+    { id: "orient", track: "Basics", title: "Getting oriented", steps: [
+      { say: "Welcome! The blinking line is a <b>prompt</b> waiting for a command. Type <b>whoami</b> to see who you're logged in as.", ok: function (c) { return c === "whoami"; }, hint: "Type: whoami" },
+      { say: "Every command can have a manual. Read one: <b>man ls</b>.", ok: function (c) { return /^man\s+ls/.test(c); }, hint: "Type: man ls" },
+      { say: "Lost? <b>help</b> lists everything you can do here.", ok: function (c) { return c === "help"; }, hint: "Type: help" }
+    ]},
+    { id: "clear-hist", track: "Basics", title: "Clear & history", steps: [
+      { say: "Run a couple of commands, then recall them. First type <b>date</b>.", ok: function (c) { return c === "date"; }, hint: "Type: date" },
+      { say: "Now see everything you've typed: <b>history</b>.", ok: function (c) { return c === "history"; }, hint: "Type: history" },
+      { say: "Tidy the screen with <b>clear</b>.", ok: function (c) { return c === "clear"; }, hint: "Type: clear" }
+    ]},
+
+    /* ===== FILES ===== */
+    { id: "copy-move", track: "Files", title: "Copying & renaming", steps: [
+      { say: "Copy notes.txt to a backup: <b>cp notes.txt notes.bak</b>.", ok: function (c) { return /^cp\s+notes\.txt\s+notes\.bak/.test(c); }, hint: "Type: cp notes.txt notes.bak" },
+      { say: "Rename the backup with <b>mv</b>: <b>mv notes.bak backup.txt</b>.", ok: function (c) { return /^mv\s+notes\.bak\s+backup\.txt/.test(c); }, hint: "Type: mv notes.bak backup.txt" },
+      { say: "Confirm both exist: <b>ls</b>.", ok: function (c) { return c.split(" ")[0] === "ls"; }, hint: "Type: ls" }
+    ]},
+    { id: "append", track: "Files", title: "> vs >> (write vs append)", steps: [
+      { say: "<b>&gt;</b> overwrites. Write a fresh file: <b>echo one &gt; list.txt</b>.", ok: function (c) { return /echo\s+.+>\s*list\.txt/.test(c) && c.indexOf(">>") === -1; }, hint: "Type: echo one > list.txt" },
+      { say: "<b>&gt;&gt;</b> adds to the end. Run: <b>echo two &gt;&gt; list.txt</b>.", ok: function (c) { return /echo\s+.+>>\s*list\.txt/.test(c); }, hint: "Type: echo two >> list.txt" },
+      { say: "See both lines: <b>cat list.txt</b>.", ok: function (c) { return /^cat\s+list\.txt/.test(c); }, hint: "Type: cat list.txt" }
+    ]},
+    { id: "peek", track: "Files", title: "Peeking: head & tail", steps: [
+      { say: "Show the first 3 lines of the log: <b>head -n 3 log.txt</b>.", ok: function (c) { return /^head/.test(c) && /log\.txt/.test(c); }, hint: "Type: head -n 3 log.txt" },
+      { say: "Show the last 2 lines: <b>tail -n 2 log.txt</b>.", ok: function (c) { return /^tail/.test(c) && /log\.txt/.test(c); }, hint: "Type: tail -n 2 log.txt" }
+    ]},
+    { id: "find", track: "Files", title: "Finding files", steps: [
+      { say: "List everything below here: <b>find .</b>.", ok: function (c) { return /^find\s+\./.test(c) && c.indexOf("-name") === -1; }, hint: "Type: find ." },
+      { say: "Now only .txt files: <b>find . -name *.txt</b>.", ok: function (c) { return /^find/.test(c) && /-name/.test(c); }, hint: "Type: find . -name *.txt" }
+    ]},
+
+    /* ===== TEXT ===== */
+    { id: "grep", track: "Text", title: "Searching inside files: grep", steps: [
+      { say: "Find every ERROR line in the log: <b>grep ERROR log.txt</b>.", ok: function (c) { return /^grep\s+ERROR\s+log\.txt/.test(c); }, hint: "Type: grep ERROR log.txt" },
+      { say: "Case doesn't match? Use <b>-i</b>: <b>grep -i error log.txt</b>.", ok: function (c) { return /^grep\s+-i\s+error\s+log\.txt/.test(c); }, hint: "Type: grep -i error log.txt" },
+      { say: "Count matches instead of showing them: <b>grep -c ERROR log.txt</b>.", ok: function (c) { return /^grep\s+-c\s+ERROR\s+log\.txt/.test(c); }, hint: "Type: grep -c ERROR log.txt" }
+    ]},
+    { id: "count", track: "Text", title: "Counting: wc", steps: [
+      { say: "How many lines in notes.txt? <b>wc -l notes.txt</b>.", ok: function (c) { return /^wc\s+-l\s+notes\.txt/.test(c); }, hint: "Type: wc -l notes.txt" },
+      { say: "How many words? <b>wc -w notes.txt</b>.", ok: function (c) { return /^wc\s+-w\s+notes\.txt/.test(c); }, hint: "Type: wc -w notes.txt" }
+    ]},
+    { id: "sort-uniq", track: "Text", title: "Sort & de-duplicate", steps: [
+      { say: "Sort the fruit list alphabetically: <b>sort fruits.txt</b>.", ok: function (c) { return /^sort\s+fruits\.txt/.test(c); }, hint: "Type: sort fruits.txt" },
+      { say: "Reverse it: <b>sort -r fruits.txt</b>.", ok: function (c) { return /^sort\s+-r\s+fruits\.txt/.test(c); }, hint: "Type: sort -r fruits.txt" },
+      { say: "Count each unique fruit: <b>uniq -c fruits.txt</b>. (real life: sort first!)", ok: function (c) { return /^uniq/.test(c) && /fruits\.txt/.test(c); }, hint: "Type: uniq -c fruits.txt" }
+    ]},
+
+    /* ===== PERMISSIONS ===== */
+    { id: "perms", track: "Permissions", title: "Reading & changing permissions", steps: [
+      { say: "See permissions with the long listing: <b>ls -l</b>.", ok: function (c) { return /^ls\s+-l/.test(c); }, hint: "Type: ls -l" },
+      { say: "Make a script executable: <b>chmod +x app.js</b>.", ok: function (c) { return /^chmod\s+\+x/.test(c); }, hint: "Type: chmod +x app.js" },
+      { say: "Or use numbers — owner all, others read+run: <b>chmod 755 app.js</b>.", ok: function (c) { return /^chmod\s+755/.test(c); }, hint: "Type: chmod 755 app.js" }
+    ]},
+
+    /* ===== NAVIGATION+ ===== */
+    { id: "paths", track: "Navigation", title: "Absolute vs relative paths", steps: [
+      { say: "Jump home from anywhere: <b>cd ~</b>.", ok: function (c) { return /^cd\s+~/.test(c) || c === "cd"; }, hint: "Type: cd ~" },
+      { say: "Go two levels in one command: <b>cd projects/hello</b>.", ok: function (c) { return /^cd\s+projects\/hello/.test(c); }, hint: "Type: cd projects/hello" },
+      { say: "Where are you now? <b>pwd</b>.", ok: function (c) { return c === "pwd"; }, hint: "Type: pwd" }
+    ]},
+    { id: "which", track: "Navigation", title: "Where does a command live?", steps: [
+      { say: "Find the path of ls: <b>which ls</b>.", ok: function (c) { return /^which\s+ls/.test(c); }, hint: "Type: which ls" },
+      { say: "Look up its manual too: <b>man grep</b>.", ok: function (c) { return /^man\s+grep/.test(c); }, hint: "Type: man grep" }
+    ]},
+
+    /* ===== PIPES & REAL SHELL (concept lessons) ===== */
+    { id: "pipes", track: "Power tools", title: "Pipes: chaining commands", steps: [
+      { say: "A <b>pipe</b> (|) feeds one command's output into the next. In a real shell: <code>cat log.txt | grep ERROR</code>. Here, run the pieces: <b>cat log.txt</b>.", ok: function (c) { return /^cat\s+log\.txt/.test(c); }, hint: "Type: cat log.txt" },
+      { say: "Now the second half on its own: <b>grep ERROR log.txt</b>. On a real system the pipe joins them into one line.", ok: function (c) { return /^grep\s+ERROR\s+log\.txt/.test(c); }, hint: "Type: grep ERROR log.txt" }
+    ]},
+    { id: "vars", track: "Power tools", title: "Variables & echo", steps: [
+      { say: "Shells store values in variables. Print one that already exists: <b>echo hello</b> (real shells: <code>echo $HOME</code>).", ok: function (c) { return /^echo\s+hello/.test(c); }, hint: "Type: echo hello" },
+      { say: "You can save output to a file for later: <b>echo saved &gt; out.txt</b>.", ok: function (c) { return /echo\s+.+>\s*out\.txt/.test(c); }, hint: "Type: echo saved > out.txt" }
+    ]}
+,
 
     /* ---- Pentest track (simulated lab, offline) ---- */
-    { id: "pt-roe", title: "Pentest 1 · Rules of engagement", steps: [
+    { id: "pt-roe", track: "Pentest", title: "Pentest 1 · Rules of engagement", steps: [
       { say: "Before ANY test you must know your limits. Type <b>scope</b> to read the rules of engagement.", ok: function (c) { return c === "scope"; }, hint: "Type: scope" },
       { say: "Legal, authorized, in-scope — always. Now see the whole attack methodology: type <b>pentest</b>.", ok: function (c) { return c === "pentest" || c === "security"; }, hint: "Type: pentest" }
     ]},
-    { id: "pt-recon", title: "Pentest 2 · Recon — find the hosts", steps: [
+    { id: "pt-recon", track: "Pentest", title: "Pentest 2 · Recon — find the hosts", steps: [
       { say: "An attacker first maps the network. Discover live hosts: <b>nmap -sn 192.168.56.0/24</b>", ok: function (c) { return /^nmap\s+-sn\s+192\.168\.56\.0\/24/.test(c); }, hint: "Type: nmap -sn 192.168.56.0/24" },
       { say: "You found 4 hosts. Fingerprint the web box's services + versions: <b>nmap -sV 192.168.56.10</b>", ok: function (c) { return /^nmap\s+-sV\s+192\.168\.56\.10/.test(c); }, hint: "Type: nmap -sV 192.168.56.10" },
       { say: "Common scans miss ports. Scan ALL of them on the old box: <b>nmap -p- 192.168.56.101</b>", ok: function (c) { return /^nmap\s+-p-\s+192\.168\.56\.101/.test(c); }, hint: "Type: nmap -p- 192.168.56.101" }
     ]},
-    { id: "pt-enum", title: "Pentest 3 · Enumerate the web target", steps: [
+    { id: "pt-enum", track: "Pentest", title: "Pentest 3 · Enumerate the web target", steps: [
       { say: "Identify the web stack: <b>whatweb 192.168.56.10</b>", ok: function (c) { return /^whatweb\s+192\.168\.56\.10/.test(c); }, hint: "Type: whatweb 192.168.56.10" },
       { say: "Scan the web server for known issues: <b>nikto 192.168.56.10</b>", ok: function (c) { return /^nikto\s+192\.168\.56\.10/.test(c); }, hint: "Type: nikto 192.168.56.10" },
       { say: "Brute-force hidden pages/dirs: <b>gobuster dir -u 192.168.56.10</b>", ok: function (c) { return /^gobuster/.test(c); }, hint: "Type: gobuster dir -u 192.168.56.10" }
     ]},
-    { id: "pt-exploit", title: "Pentest 4 · Find & confirm a flaw", steps: [
+    { id: "pt-exploit", track: "Pentest", title: "Pentest 4 · Find & confirm a flaw", steps: [
       { say: "Test the search parameter for SQL injection: <b>sqlmap 192.168.56.10</b>", ok: function (c) { return /^sqlmap\s+192\.168\.56\.10/.test(c); }, hint: "Type: sqlmap 192.168.56.10" },
       { say: "Confirmed vulnerable. In your real Kali lab you'd exploit it. First, re-read the limits: type <b>scope</b>.", ok: function (c) { return c === "scope"; }, hint: "Type: scope" },
       { say: "Now read the in-depth Field Guide below (tap a chapter) to learn HOW each attack works and how to STOP it.", ok: function (c) { return c === "learn" || c === "guide"; }, hint: "Type: learn" }
     ]},
-    { id: "pt-vuln", title: "Pentest 5 · Vulnerability scanning", steps: [
+    { id: "pt-vuln", track: "Pentest", title: "Pentest 5 · Vulnerability scanning", steps: [
       { say: "Run nmap's vuln scripts against the old box: <b>nmap --script vuln 192.168.56.101</b>", ok: function (c) { return /^nmap/.test(c) && /vuln/.test(c) && /56\.101/.test(c); }, hint: "Type: nmap --script vuln 192.168.56.101" },
       { say: "See that backdoored <b>vsftpd 2.3.4</b>? That's your way in. Confirm the version: <b>nmap -sV 192.168.56.101</b>", ok: function (c) { return /^nmap\s+-sV\s+192\.168\.56\.101/.test(c); }, hint: "Type: nmap -sV 192.168.56.101" }
     ]},
-    { id: "pt-banner", title: "Pentest 6 · Banner grabbing with netcat", steps: [
+    { id: "pt-banner", track: "Pentest", title: "Pentest 6 · Banner grabbing with netcat", steps: [
       { say: "Grab the FTP banner by hand: <b>nc 192.168.56.101 21</b>", ok: function (c) { return /^nc\s+192\.168\.56\.101\s+21/.test(c); }, hint: "Type: nc 192.168.56.101 21" },
       { say: "Now the SSH banner: <b>nc 192.168.56.20 22</b>", ok: function (c) { return /^nc\s+192\.168\.56\.20\s+22/.test(c); }, hint: "Type: nc 192.168.56.20 22" }
     ]},
-    { id: "pt-smb", title: "Pentest 7 · SMB enumeration", steps: [
+    { id: "pt-smb", track: "Pentest", title: "Pentest 7 · SMB enumeration", steps: [
       { say: "Enumerate SMB shares on the file box: <b>enum4linux 192.168.56.20</b>", ok: function (c) { return /^enum4linux\s+192\.168\.56\.20/.test(c); }, hint: "Type: enum4linux 192.168.56.20" },
       { say: "List the shares directly too: <b>smbclient -L 192.168.56.20</b>", ok: function (c) { return /^smbclient/.test(c) && /56\.20/.test(c); }, hint: "Type: smbclient -L 192.168.56.20" }
     ]},
-    { id: "pt-brute", title: "Pentest 8 · Password brute-forcing", steps: [
+    { id: "pt-brute", track: "Pentest", title: "Pentest 8 · Password brute-forcing", steps: [
       { say: "Brute-force SSH on the file box: <b>hydra 192.168.56.20 ssh</b>", ok: function (c) { return /^hydra/.test(c) && /56\.20/.test(c); }, hint: "Type: hydra 192.168.56.20 ssh" },
       { say: "You found weak creds. Note WHY it worked — then re-read the rules: <b>scope</b>", ok: function (c) { return c === "scope"; }, hint: "Type: scope" }
     ]},
-    { id: "pt-ftp", title: "Pentest 9 · Anonymous FTP & risky versions", steps: [
+    { id: "pt-ftp", track: "Pentest", title: "Pentest 9 · Anonymous FTP & risky versions", steps: [
       { say: "Connect to FTP on the old box: <b>ftp 192.168.56.101</b>", ok: function (c) { return /^ftp\s+192\.168\.56\.101/.test(c); }, hint: "Type: ftp 192.168.56.101" },
       { say: "Anonymous login + a backdoored version! Find the exploit: <b>searchsploit vsftpd 2.3.4</b>", ok: function (c) { return /^searchsploit/.test(c) && /vsftpd/.test(c); }, hint: "Type: searchsploit vsftpd 2.3.4" }
     ]},
-    { id: "pt-exploit2", title: "Pentest 10 · Exploit with Metasploit", steps: [
+    { id: "pt-exploit2", track: "Pentest", title: "Pentest 10 · Exploit with Metasploit", steps: [
       { say: "You have a matching exploit. Walk the Metasploit flow: type <b>msfconsole</b>", ok: function (c) { return /^msf/.test(c); }, hint: "Type: msfconsole" },
       { say: "That's initial access. Study how you'd DETECT it — open the Field Guide: <b>learn</b>", ok: function (c) { return c === "learn"; }, hint: "Type: learn" }
     ]},
-    { id: "pt-crack", title: "Pentest 11 · Cracking password hashes", steps: [
+    { id: "pt-crack", track: "Pentest", title: "Pentest 11 · Cracking password hashes", steps: [
       { say: "You looted a password hash. Crack it offline: <b>hashcat -m 0 hashes.txt rockyou.txt</b>", ok: function (c) { return /^hashcat/.test(c); }, hint: "Type: hashcat -m 0 hashes.txt rockyou.txt" },
       { say: "Instant — because it was unsalted MD5. Try John too: <b>john hashes.txt</b>", ok: function (c) { return /^john/.test(c); }, hint: "Type: john hashes.txt" }
     ]},
-    { id: "pt-web2", title: "Pentest 12 · Web app deep dive", steps: [
+    { id: "pt-web2", track: "Pentest", title: "Pentest 12 · Web app deep dive", steps: [
       { say: "Fingerprint the web target: <b>whatweb 192.168.56.10</b>", ok: function (c) { return /^whatweb\s+192\.168\.56\.10/.test(c); }, hint: "Type: whatweb 192.168.56.10" },
       { say: "Brute-force hidden paths: <b>gobuster dir -u 192.168.56.10</b>", ok: function (c) { return /^gobuster/.test(c); }, hint: "Type: gobuster dir -u 192.168.56.10" },
       { say: "Test for SQL injection: <b>sqlmap 192.168.56.10</b>", ok: function (c) { return /^sqlmap\s+192\.168\.56\.10/.test(c); }, hint: "Type: sqlmap 192.168.56.10" }
     ]},
-    { id: "pt-blue", title: "Pentest 13 · Blue team — detect it", steps: [
+    { id: "pt-blue", track: "Pentest", title: "Pentest 13 · Blue team — detect it", steps: [
       { say: "Every attack above leaves traces. Open the Field Guide to chapter 8: type <b>learn</b>", ok: function (c) { return c === "learn"; }, hint: "Type: learn" },
       { say: "Read '8 · Blue Team: Detection & Response', then come back. Type <b>pentest</b> to review the whole chain.", ok: function (c) { return c === "pentest" || c === "security"; }, hint: "Type: pentest" }
     ]},
-    { id: "pt-report", title: "Pentest 14 · Report & remediate", steps: [
+    { id: "pt-report", track: "Pentest", title: "Pentest 14 · Report & remediate", steps: [
       { say: "A finding isn't done until it's written up. Open the guide: <b>learn</b> and read '9 · Reporting'.", ok: function (c) { return c === "learn"; }, hint: "Type: learn" },
       { say: "Final check — confirm you stayed in scope the whole time: <b>scope</b>", ok: function (c) { return c === "scope"; }, hint: "Type: scope" }
     ]}
@@ -686,29 +1015,91 @@
       out("✓ nice.", "ok");
       lesson.step++;
       if (lesson.step >= lesson.l.steps.length) {
-        outHTML("🎉 Lesson complete: <b>" + lesson.l.title + "</b>. Try the next one in the Learn tab!", "lesson");
+        markLessonComplete(lesson.l.id);
+        outHTML("🎉 Lesson complete: <b>" + lesson.l.title + "</b>. Progress saved. Try the next one in the Learn tab!", "lesson");
         lesson.active = false;
       } else lessonPrompt();
     } else {
       out("Not quite. Hint: " + st.hint, "sys");
     }
   }
+  var TRACK_ORDER = ["Basics", "Navigation", "Files", "Text", "Permissions", "Power tools", "Pentest"];
+  var TRACK_META = {
+    "Basics":      { icon: "👣", blurb: "First steps in the shell" },
+    "Navigation":  { icon: "🧭", blurb: "Move around the filesystem" },
+    "Files":       { icon: "📄", blurb: "Create, copy, move, find" },
+    "Text":        { icon: "🔍", blurb: "Search, count, sort text" },
+    "Permissions": { icon: "🔐", blurb: "Who can read/write/run" },
+    "Power tools": { icon: "⚡", blurb: "Pipes, variables, chaining" },
+    "Pentest":     { icon: "🛡️", blurb: "Ethical hacking methodology" }
+  };
+
+  function progressRing(done, total) {
+    var pct = total ? Math.round((done / total) * 100) : 0;
+    var C = 2 * Math.PI * 26;
+    var off = C * (1 - pct / 100);
+    return "<div class='ring-wrap'><svg class='ring' viewBox='0 0 60 60'>" +
+      "<circle class='ring-bg' cx='30' cy='30' r='26'></circle>" +
+      "<circle class='ring-fg' cx='30' cy='30' r='26' stroke-dasharray='" + C.toFixed(1) +
+      "' stroke-dashoffset='" + off.toFixed(1) + "'></circle></svg>" +
+      "<div class='ring-pct'>" + pct + "%</div></div>";
+  }
+
   function renderLessons() {
     var box = document.getElementById("lessonList");
     box.innerHTML = "";
-    LESSONS.forEach(function (l) {
-      var card = document.createElement("div");
-      card.className = "card";
-      var isPt = l.id.indexOf("pt-") === 0;
-      card.innerHTML = "<h3>" + l.title + "</h3><p>" + l.steps.length + " steps" +
-        (isPt ? " · <span style='color:var(--yellow)'>security</span>" : "") + "</p>";
-      var b = document.createElement("button");
-      b.className = "btn primary"; b.textContent = "Start";
-      b.onclick = function () { startLesson(l.id); };
-      var row = document.createElement("div"); row.className = "btnrow"; row.appendChild(b);
-      card.appendChild(row); box.appendChild(card);
+    var progress = loadProgress();
+    var done = LESSONS.filter(function (l) { return progress[l.id]; }).length;
+
+    var hero = document.createElement("div");
+    hero.className = "progress-hero";
+    hero.innerHTML = progressRing(done, LESSONS.length) +
+      "<div class='hero-txt'><div class='hero-num'>" + done + " / " + LESSONS.length + "</div>" +
+      "<div class='hero-sub'>lessons complete · saved offline on this device</div></div>";
+    box.appendChild(hero);
+
+    var groups = {};
+    LESSONS.forEach(function (l) { var t = l.track || "Other"; (groups[t] = groups[t] || []).push(l); });
+    var order = TRACK_ORDER.filter(function (t) { return groups[t]; });
+    Object.keys(groups).forEach(function (t) { if (order.indexOf(t) === -1) order.push(t); });
+
+    order.forEach(function (t) {
+      var items = groups[t];
+      var tdone = items.filter(function (l) { return progress[l.id]; }).length;
+      var meta = TRACK_META[t] || { icon: "📘", blurb: "" };
+
+      var sect = document.createElement("div");
+      sect.className = "track" + (tdone === items.length ? " track-done" : "");
+
+      var head = document.createElement("button");
+      head.className = "track-head"; head.type = "button";
+      head.innerHTML = "<span class='track-ic'>" + meta.icon + "</span>" +
+        "<span class='track-name'>" + t + "<small>" + meta.blurb + "</small></span>" +
+        "<span class='track-count'>" + tdone + "/" + items.length + "</span>" +
+        "<span class='track-chev'>›</span>";
+      var body = document.createElement("div"); body.className = "track-body";
+      head.onclick = function () { sect.classList.toggle("open"); };
+
+      items.forEach(function (l) {
+        var complete = !!progress[l.id];
+        var row = document.createElement("div");
+        row.className = "lesson-row" + (complete ? " done" : "");
+        row.innerHTML = "<span class='lesson-check'>" + (complete ? "✓" : "○") + "</span>" +
+          "<span class='lesson-info'><b>" + l.title + "</b><small>" + l.steps.length + " steps</small></span>";
+        var b = document.createElement("button");
+        b.className = "lesson-go"; b.type = "button";
+        b.textContent = complete ? "↺" : "Start";
+        b.onclick = function (e) { e.stopPropagation(); startLesson(l.id); };
+        row.appendChild(b); body.appendChild(row);
+      });
+
+      sect.appendChild(head); sect.appendChild(body);
+      if (tdone < items.length && !document.querySelector(".track.open")) sect.classList.add("open");
+      box.appendChild(sect);
     });
+
     renderGuide(box);
+    renderAgentSkills(box);
   }
 
   /* ---------- In-depth offline Field Guide (offense + how to defend) ----------
@@ -837,6 +1228,137 @@
     });
   }
 
+  /* ---------- Agent Skills — offline curriculum for building WITH an AI ----------
+   * How coding agents (like Kortana) actually work, and the skills to drive one:
+   * specs, the act/observe loop, tools, debugging, git, testing, and how she
+   * grows without degrading. Fully offline, in depth. */
+  var SKILLS = [
+    { title: "1 · How an AI coding agent actually works", body:
+      "<p>An 'agent' isn't magic — it's a loop around a language model:</p>" +
+      "<ol><li><b>Perceive</b> — it reads your request plus context (files, errors, history).</li>" +
+      "<li><b>Plan</b> — it decides the next single step.</li>" +
+      "<li><b>Act</b> — it calls a <i>tool</i> (run a command, search the web, edit a file).</li>" +
+      "<li><b>Observe</b> — it reads the result of that action.</li>" +
+      "<li><b>Repeat</b> — until the goal is met.</li></ol>" +
+      "<p>The model itself only predicts text. What makes it an <i>agent</i> is that its text can trigger tools, and the tool results feed back in. Kortana runs exactly this loop in Terminus (<code>runToolLoop</code>).</p>" +
+      "<p class='gtag'>Key idea: an agent is a <b>loop + tools + memory</b> wrapped around a model — not the model alone.</p>" },
+
+    { title: "2 · Context is everything (and it's finite)", body:
+      "<p>The model can only 'see' what's in its <b>context window</b> — a fixed budget of tokens (roughly ¾ of a word each). Everything competes for that space: your message, the files, the error, the history.</p>" +
+      "<ul><li>Give the <b>relevant</b> slice, not the whole repo. Paste the failing function, not the entire file.</li>" +
+      "<li>Show the <b>actual error text</b>, not 'it broke'.</li>" +
+      "<li>Old, irrelevant history crowds out room to think — start fresh for a new task.</li></ul>" +
+      "<p class='gtag'>A focused 20-line context beats a vague 2,000-line one every time.</p>" },
+
+    { title: "3 · Write a spec the agent can nail", body:
+      "<p>A weak ask gets a weak result. A good spec has four parts:</p>" +
+      "<ul><li><b>Goal</b> — what should be true when it's done.</li>" +
+      "<li><b>Constraints</b> — language, style, what NOT to touch.</li>" +
+      "<li><b>Acceptance check</b> — how you'll both know it worked (a command that passes, an output that appears).</li>" +
+      "<li><b>Example</b> — one concrete input → expected output.</li></ul>" +
+      "<p>Compare: <i>'make it faster'</i> vs <i>'cut the /search response under 200ms for a 10k-row table; keep the JSON shape; verify with the timing log'.</i></p>" +
+      "<p class='gtag'>The acceptance check is the most-skipped and most-valuable part. Always include it.</p>" },
+
+    { title: "4 · The plan → act → observe loop (your loop too)", body:
+      "<p>The single biggest skill: <b>one small change at a time, then verify.</b></p>" +
+      "<ul><li>Make the smallest change that could work.</li>" +
+      "<li>Run it. Read what actually happened.</li>" +
+      "<li>Only then decide the next step.</li></ul>" +
+      "<p>Batching ten changes and running once means you can't tell which one broke it. Agents that 'go quiet for a long time' are usually skipping the observe step — don't let yours (or you) do that.</p>" +
+      "<p class='gtag'>Small step, verify, repeat. This is how both you and Kortana avoid digging holes.</p>" },
+
+    { title: "5 · Tools & function calling", body:
+      "<p>A tool is a named action the agent can request, with arguments, and get a result back. Kortana's tools include <code>web_search</code>, <code>web_fetch</code>, an allowlisted read-only <code>shell</code>, and file read.</p>" +
+      "<p>She calls one by emitting a line like:</p>" +
+      "<div class='cmd-preview'>TOOL_CALL: web_search {\"query\":\"nginx 502 after deploy\"}</div>" +
+      "<p>Terminus runs it, feeds the result back, and she continues. This is how she can <b>look things up she doesn't know</b> instead of guessing.</p>" +
+      "<p class='gtag'>Tools turn a model that only knows its training data into one that can act on today's world.</p>" },
+
+    { title: "6 · Read errors like a detective", body:
+      "<p>Most debugging is reading. The error already tells you most of it.</p>" +
+      "<ul><li><b>Read the LAST error first</b> — the bottom of a stack trace is usually where it actually failed.</li>" +
+      "<li><b>Reproduce it</b> reliably before changing anything — a bug you can't trigger, you can't fix.</li>" +
+      "<li><b>Bisect</b> — comment half out, or <code>git bisect</code>, to find where it starts.</li>" +
+      "<li><b>Change one thing</b>, re-run, repeat.</li></ul>" +
+      "<p>When you ask Kortana for help, paste the <i>real</i> error and what you already tried — that skips ten guesses.</p>" +
+      "<p class='gtag'>The error message is a gift, not noise. Read it slowly.</p>" },
+
+    { title: "7 · Git without fear", body:
+      "<p>Git is your undo button — learn just enough to never lose work.</p>" +
+      "<ul><li><code>git status</code> — what changed (run it constantly).</li>" +
+      "<li><code>git diff</code> — exactly what changed, line by line. <b>Review before you commit.</b></li>" +
+      "<li><code>git add -p</code> — stage changes hunk by hunk so commits stay small and meaningful.</li>" +
+      "<li><code>git commit -m \"why, not just what\"</code>.</li>" +
+      "<li><code>git checkout -b feature/x</code> — never experiment on <code>main</code>.</li>" +
+      "<li>Made a mess? <code>git restore &lt;file&gt;</code> or <code>git reset --hard</code> (loses uncommitted work — know that).</li></ul>" +
+      "<p class='gtag'>Commit small and often; a good history is a series of safe checkpoints you can walk back to.</p>" },
+
+    { title: "8 · Testing & verification — trust nothing unchecked", body:
+      "<p>'It looks right' is not 'it works'. Before you believe any change — yours or an agent's — <b>have a check that proves it.</b></p>" +
+      "<ul><li>A test, a curl that returns 200, an output that matches, a number that dropped.</li>" +
+      "<li>Write (or state) the check <i>before</i> the change, so success is defined up front.</li>" +
+      "<li>Re-run the check after every step — that's the 'observe' in the loop.</li></ul>" +
+      "<p>Agents hallucinate confident wrong answers; a concrete check is what catches them. This is the discipline that separates shipping from hoping.</p>" +
+      "<p class='gtag'>No check, no trust. Define 'done' as something you can run.</p>" },
+
+    { title: "9 · Prompting Kortana (your coding companion)", body:
+      "<p>She's most useful when you give her what she needs to think:</p>" +
+      "<ul><li><b>Context</b> — the file/function, not a paraphrase.</li>" +
+      "<li><b>The error</b> — verbatim.</li>" +
+      "<li><b>What you tried</b> — so she doesn't repeat it.</li>" +
+      "<li><b>What you want</b> — and whether you want the answer, or to be <i>coached</i> to it.</li></ul>" +
+      "<p>Turn on <b>Coach mode</b> (Kortana tab → 'watch &amp; coach as I work') and she'll watch your terminal and nudge you as you go — a tip, a warning, the next step — instead of only answering when asked.</p>" +
+      "<p class='gtag'>Ask for the next step, not the whole solution, when you're trying to learn. You'll remember it.</p>" },
+
+    { title: "10 · How she grows without degrading", body:
+      "<p>You can't retrain a model on a phone — and repeatedly fine-tuning on your own chats actually makes models <i>worse</i> (they drift and forget). So real, non-degrading growth doesn't touch the weights at all. Instead:</p>" +
+      "<ul><li><b>Memory</b> — she saves what she learns about you and your projects, and reloads it as context.</li>" +
+      "<li><b>Skills</b> — reusable procedures she writes down (in <code>.agent-memory/skills</code>) and follows later.</li>" +
+      "<li><b>Web search</b> — she looks up what she doesn't know, on demand.</li>" +
+      "<li><b>Better model, same her</b> — pull a stronger Ollama coding model and she uses it automatically; her identity and memory are unchanged.</li></ul>" +
+      "<p>That's the honest version of a 'recursive learning loop': she accumulates <i>knowledge and code she keeps</i>, which never degrades, rather than chasing weight updates that do.</p>" +
+      "<p class='gtag'>Growth = accumulated memory + skills + tools + a better model underneath. Not fine-tuning on yourself.</p>" },
+
+    { title: "11 · Safety, scope & secrets", body:
+      "<p>An agent that can run commands and act on your phone needs guardrails — these are yours to keep:</p>" +
+      "<ul><li><b>Least privilege</b> — give her the narrowest access that does the job (her shell tool is read-only + allowlisted for exactly this reason).</li>" +
+      "<li><b>Review before running</b> anything destructive; a confident suggestion can still be wrong.</li>" +
+      "<li><b>Secrets never in code</b> — API keys go in <code>.env</code> / secret stores, never committed. (Terminus keeps keys in <code>server/.env</code>.)</li>" +
+      "<li><b>Scope</b> — the accessibility service that lets her see your screen is off until you enable it, and one tap revokes it. That's the trust boundary; you hold it.</li></ul>" +
+      "<p class='gtag'>Power + guardrails, not power alone. You stay the owner of what she's allowed to touch.</p>" }
+  ];
+
+  function renderAgentSkills(box) {
+    var hdr = document.createElement("div");
+    hdr.className = "section-title";
+    hdr.style.marginTop = "18px";
+    hdr.textContent = "Agent Skills — building WITH an AI (offline, in depth)";
+    box.appendChild(hdr);
+
+    SKILLS.forEach(function (ch) {
+      var card = document.createElement("div");
+      card.className = "card";
+      var head = document.createElement("h3");
+      head.textContent = ch.title;
+      head.style.cursor = "pointer";
+      var body = document.createElement("div");
+      body.className = "guide-body";
+      body.style.display = "none";
+      body.innerHTML = ch.body;
+      var toggle = document.createElement("button");
+      toggle.className = "btn"; toggle.type = "button"; toggle.textContent = "Read ▾";
+      toggle.onclick = function () {
+        var open = body.style.display === "none";
+        body.style.display = open ? "block" : "none";
+        toggle.textContent = open ? "Hide ▴" : "Read ▾";
+      };
+      head.onclick = toggle.onclick;
+      var row = document.createElement("div"); row.className = "btnrow"; row.appendChild(toggle);
+      card.appendChild(head); card.appendChild(row); card.appendChild(body);
+      box.appendChild(card);
+    });
+  }
+
   /* ---------- Servers ---------- */
   var SKEY = "terminalapi.servers";
   var PRESETS = [
@@ -923,6 +1445,263 @@
       "Install Termux and Termux:API from the <i>same</i> source.</p></div>";
   }
 
+  /* ---------- Kortana — chat with her local Terminus brain ----------
+   * BashMeSilly is her front-end: this tab talks to Terminus (POST /api/brain)
+   * running on the phone (default http://127.0.0.1:3300), and can start/stop
+   * her brains (Ollama) + server through the existing Termux bridge. The HTTP
+   * goes through the native bridge so the localhost/cleartext + WebView
+   * mixed-content limits don't apply. Chat history is saved offline. */
+  var KURL_KEY = "terminalapi.kortana.url";
+  var KCHAT_KEY = "terminalapi.kortana.chat";
+  var KMODEL_KEY = "terminalapi.kortana.model";
+  var KCOACH_KEY = "terminalapi.kortana.coach";   // auto-coach toggle
+  var KKEY_KEY = "terminalapi.kortana.key";       // TERMINUS_API_KEY for the hosted brain
+  var K_DEFAULT_URL = "https://k3-6pwr.onrender.com";  // her always-on Render brain (off the phone)
+  var K_START = "bash ~/k3/server/deploy/termux-start.sh";
+  var kLastCoach = 0;   // debounce timestamp for auto-coach
+
+  function kortanaUrl() { return (localStorage.getItem(KURL_KEY) || K_DEFAULT_URL).replace(/\/+$/, ""); }
+  function kortanaKey() { return (localStorage.getItem(KKEY_KEY) || "").trim(); }
+  function loadKChat() { return readJSON(KCHAT_KEY, []); }
+  function saveKChat(a) { saveJSON(KCHAT_KEY, a.slice(-100)); }
+
+  /* Async bridge HTTP. Resolves to an envelope {ok,status,body} | {ok:false,error}.
+   * Falls back to real fetch() in a plain browser so the tab is dev-testable. */
+  var __bridgeCbs = {};
+  window.__bridgeResolve = function (id, envelopeStr) {
+    var cb = __bridgeCbs[id]; if (!cb) return; delete __bridgeCbs[id];
+    var env; try { env = JSON.parse(envelopeStr); } catch (e) { env = { ok: false, error: "bad-envelope" }; }
+    cb(env);
+  };
+  function kHttp(method, url, body) {
+    var key = kortanaKey();   // sent as x-api-key so the hosted brain authenticates
+    if (HAS_BRIDGE && Android.httpGet && Android.httpPostJson) {
+      return new Promise(function (resolve) {
+        var id = "cb" + Date.now() + Math.random().toString(36).slice(2);
+        __bridgeCbs[id] = resolve;
+        try {
+          if (method === "POST") {
+            if (key && Android.httpPostJsonKeyed) Android.httpPostJsonKeyed(url, body || "", key, id);
+            else Android.httpPostJson(url, body || "", id);
+          } else {
+            if (key && Android.httpGetKeyed) Android.httpGetKeyed(url, key, id);
+            else Android.httpGet(url, id);
+          }
+        } catch (e) { delete __bridgeCbs[id]; resolve({ ok: false, error: String(e) }); }
+      });
+    }
+    var headers = key ? { "x-api-key": key } : {};
+    var opts;
+    if (method === "POST") {
+      headers["Content-Type"] = "application/json";
+      opts = { method: "POST", headers: headers, body: body };
+    } else {
+      opts = { method: "GET", headers: headers };
+    }
+    return fetch(url, opts).then(function (r) {
+      return r.text().then(function (t) { return { ok: r.ok, status: r.status, body: t }; });
+    }).catch(function (e) { return { ok: false, error: String(e) }; });
+  }
+
+  function kBubble(sender, text, core) {
+    var box = document.getElementById("kchat");
+    if (!box) return null;
+    var div = document.createElement("div");
+    div.className = "kmsg " + (sender === "USER" ? "me" : "her");
+    var tag = core ? " <span class='kcore'>" + escapeHTML(core) + "</span>" : "";
+    div.innerHTML = "<div class='kwho'>" + (sender === "USER" ? "You" : "Kortana") + tag + "</div><div class='ktext'></div>";
+    div.querySelector(".ktext").textContent = text;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+    return div;
+  }
+
+  function renderKChat() {
+    var box = document.getElementById("kchat");
+    if (!box) return;
+    box.innerHTML = "";
+    var chat = loadKChat();
+    if (!chat.length) kBubble("KORTANA", "Hi Daddy. I live on my always-on server now — no need to keep me on your phone. Set my URL + API key in settings below, tap PING, then talk to me here.", null);
+    else chat.forEach(function (m) { kBubble(m.sender, m.message, m.core); });
+  }
+
+  function kStatus(msg, cls) {
+    var el = document.getElementById("kStatusLine");
+    if (el) { el.textContent = msg; el.className = "kstatus " + (cls || ""); }
+  }
+
+  function kSummarizeCores(c) {
+    var parts = [];
+    if (c.ollama) parts.push(c.ollama.reachable ? "ollama ✓ (" + (c.ollama.model || "?") + ")" : "ollama ✗");
+    parts.push("groq " + (c.groq ? "✓" : "✗"));   // her free always-on brain
+    parts.push("gemini " + (c.gemini ? "✓" : "✗"));
+    parts.push("claude " + (c.claude ? "✓" : "✗"));
+    return parts.join(" · ");
+  }
+
+  function kPing() {
+    kStatus("Pinging Terminus…", "");
+    kHttp("GET", kortanaUrl() + "/health").then(function (env) {
+      if (!env || !env.ok) { kStatus("Terminus unreachable at " + kortanaUrl() + " — tap Start below.", "err"); return; }
+      var h = null; try { h = JSON.parse(env.body); } catch (e) {}
+      if (!h || !h.cores) { kStatus("Terminus is up, but returned no core status.", "warn"); return; }
+      kStatus("Terminus online · " + kSummarizeCores(h.cores), "ok");
+    });
+  }
+
+  function kSend() {
+    var inp = document.getElementById("kInput");
+    if (!inp) return;
+    var msg = (inp.value || "").trim();
+    if (!msg) return;
+    inp.value = "";
+
+    var prior = loadKChat();
+    var history = prior.slice(-12).map(function (m) { return { sender: m.sender, message: m.message }; });
+    prior.push({ sender: "USER", message: msg }); saveKChat(prior);
+    kBubble("USER", msg);
+
+    var thinking = kBubble("KORTANA", "…", null);
+    if (thinking) thinking.classList.add("thinking");
+
+    kHttp("POST", kortanaUrl() + "/api/brain", JSON.stringify({ message: msg, history: history }))
+      .then(function (env) {
+        var reply = null, core = null;
+        if (env && env.ok) { try { var r = JSON.parse(env.body); reply = r.reply; core = r.core; } catch (e) {} }
+        if (!reply) {
+          if (env && env.status === 401) {
+            reply = "My server needs my key, Daddy — paste my TERMINUS_API_KEY in the API key box in settings below, then try again.";
+          } else if (env && env.ok) {
+            reply = "(Kortana returned an unexpected reply.)";
+          } else {
+            reply = "I can't reach my Terminus at " + kortanaUrl() + ", Daddy. Tap PING below, or set my URL + key in settings.";
+          }
+        }
+        if (thinking) thinking.remove();
+        kBubble("KORTANA", reply, core);
+        var after = loadKChat(); after.push({ sender: "KORTANA", message: reply, core: core }); saveKChat(after);
+      });
+  }
+
+  /* Coach — Kortana watches what you're doing in the terminal and proactively
+   * guides you. Sends recent commands + output to Terminus /api/kortana/coach,
+   * which replies with one short nudge (or nothing). Manual button, or auto
+   * after each command when "watch & coach" is on. */
+  function autoCoachEnabled() { return localStorage.getItem(KCOACH_KEY) === "1"; }
+
+  function kGatherActivity() {
+    var cmds = history.slice(-12);   // terminal command history (IIFE-scoped)
+    var el = document.getElementById("screen");
+    var scr = el ? (el.innerText || el.textContent || "") : "";
+    scr = scr.split("\n").slice(-40).join("\n");
+    return "Recent commands he typed in the BashMeSilly terminal:\n" +
+      (cmds.length ? cmds.join("\n") : "(none yet)") +
+      "\n\nRecent terminal output:\n" + scr;
+  }
+
+  function kCoach(manual) {
+    var now = Date.now();
+    if (!manual && now - kLastCoach < 20000) return;   // don't nag more than every 20s
+    kLastCoach = now;
+    if (manual && bridge.toast) bridge.toast("Asking Kortana to look…");
+    var body = JSON.stringify({
+      note: "Daddy is learning bash / coding in the BashMeSilly terminal.",
+      screen: kGatherActivity()
+    });
+    kHttp("POST", kortanaUrl() + "/api/kortana/coach", body).then(function (env) {
+      var tip = null, core = null;
+      if (env && env.ok) { try { var r = JSON.parse(env.body); tip = r.tip; core = r.core; } catch (e) {} }
+      if (tip) {
+        var after = loadKChat(); after.push({ sender: "KORTANA", message: "👀 " + tip, core: core }); saveKChat(after);
+        if (document.getElementById("kchat")) kBubble("KORTANA", "👀 " + tip, core);
+        if (bridge.toast) bridge.toast("Kortana: " + tip);
+      } else if (manual && bridge.toast) {
+        bridge.toast(env && env.ok ? "Kortana: looks good — nothing to add." : "Can't reach Kortana's Terminus.");
+      }
+    });
+  }
+
+  function renderKortana() {
+    var banner = document.getElementById("kortanaBanner");
+    if (!banner) return;
+    banner.innerHTML =
+      "<div class='card kcontrols'>" +
+      "<div class='kstatus' id='kStatusLine'>Not connected yet — tap PING, or Start to bring her up.</div>" +
+      "<div class='btnrow'>" +
+      "<button id='kPingBtn' class='btn primary' type='button'>PING cores</button>" +
+      "<button id='kStartBtn' class='btn accent' type='button'>Start brains + server</button>" +
+      "</div>" +
+      "<div class='btnrow'>" +
+      "<button id='kStopBtn' class='btn' type='button'>Stop server</button>" +
+      "<button id='kRestartBtn' class='btn' type='button'>Restart</button>" +
+      "<button id='kTermuxBtn' class='btn' type='button'>Open Termux</button>" +
+      "</div>" +
+      "<div class='btnrow'>" +
+      "<button id='kCoachBtn' class='btn' type='button'>👀 Coach me now</button>" +
+      "<label class='kcoach-toggle'><input type='checkbox' id='kAutoCoach'> watch &amp; coach as I work</label>" +
+      "</div>" +
+      "<div class='field'><label>Terminus URL</label>" +
+      "<input id='kUrlInput' type='text' autocomplete='off' placeholder='" + K_DEFAULT_URL + "'></div>" +
+      "<div class='field'><label>API key (TERMINUS_API_KEY)</label>" +
+      "<input id='kKeyInput' type='password' autocomplete='off' placeholder='paste her key to reach the Render brain'></div>" +
+      "<details class='kadvanced'><summary>Coding brain (Ollama)</summary>" +
+      "<p>Pull a coding model — Terminus auto-uses the best installed one, so this becomes her brain once it's downloaded (needs free RAM).</p>" +
+      "<div class='field'><input id='kModelInput' type='text' autocomplete='off' placeholder='qwen2.5-coder:3b'></div>" +
+      "<div class='btnrow'><button id='kPullBtn' class='btn' type='button'>Pull model in Termux</button></div>" +
+      "</details></div>";
+
+    var urlInput = document.getElementById("kUrlInput");
+    urlInput.value = localStorage.getItem(KURL_KEY) || "";
+    urlInput.addEventListener("change", function () {
+      var v = this.value.trim();
+      if (v) localStorage.setItem(KURL_KEY, v); else localStorage.removeItem(KURL_KEY);
+      kStatus("Server URL saved. Tap PING to test.", "");
+    });
+
+    var keyInput = document.getElementById("kKeyInput");
+    keyInput.value = localStorage.getItem(KKEY_KEY) || "";
+    keyInput.addEventListener("change", function () {
+      var v = this.value.trim();
+      if (v) localStorage.setItem(KKEY_KEY, v); else localStorage.removeItem(KKEY_KEY);
+      kStatus("API key saved. Tap PING to test.", "");
+    });
+
+    var modelInput = document.getElementById("kModelInput");
+    modelInput.value = localStorage.getItem(KMODEL_KEY) || "";
+
+    document.getElementById("kPingBtn").onclick = kPing;
+    document.getElementById("kStartBtn").onclick = function () {
+      bridge.run(K_START, false);
+      bridge.toast("Starting Kortana… give her ~15s, then PING.");
+      kStatus("Starting her brains + server in Termux… wait ~15s, then tap PING.", "");
+    };
+    document.getElementById("kStopBtn").onclick = function () {
+      bridge.run("pkill -f 'node index.js'", true); bridge.toast("Stopped Terminus (brains left running).");
+      kStatus("Sent stop to Terminus.", "");
+    };
+    document.getElementById("kRestartBtn").onclick = function () {
+      bridge.run("pkill -f 'node index.js'; sleep 1; " + K_START, false);
+      bridge.toast("Restarting Terminus…"); kStatus("Restarting Terminus… wait ~15s, then PING.", "");
+    };
+    document.getElementById("kTermuxBtn").onclick = function () { bridge.openTermux(); };
+    document.getElementById("kCoachBtn").onclick = function () { kCoach(true); };
+    var auto = document.getElementById("kAutoCoach");
+    auto.checked = autoCoachEnabled();
+    auto.addEventListener("change", function () {
+      localStorage.setItem(KCOACH_KEY, this.checked ? "1" : "0");
+      kStatus(this.checked ? "Coach mode on — I'll watch as you work." : "Coach mode off.", "");
+    });
+    document.getElementById("kPullBtn").onclick = function () {
+      var m = (document.getElementById("kModelInput").value || "").trim() || "qwen2.5-coder:3b";
+      localStorage.setItem(KMODEL_KEY, m);
+      bridge.run("ollama pull " + m, false);
+      bridge.toast("Pulling " + m + " in Termux…");
+    };
+
+    renderKChat();
+    kPing();   // auto-check reachability on open
+  }
+
   /* ---------- Navigation ---------- */
   function switchView(name) {
     var views = document.querySelectorAll(".view");
@@ -931,7 +1710,9 @@
     var btns = document.querySelectorAll("nav button");
     for (var j = 0; j < btns.length; j++) btns[j].classList.toggle("active", btns[j].getAttribute("data-view") === name);
     if (name === "servers") renderServers();
+    if (name === "learn") renderLessons();
     if (name === "help") renderHelp();
+    if (name === "kortana") { renderKortana(); document.getElementById("kInput").focus(); }
     if (name === "terminal") document.getElementById("cmdInput").focus();
   }
 
@@ -966,11 +1747,20 @@
 
   function init() {
     renderChips();
+    var prevScreen = restoreSession();   // load saved sandbox, history, progress, toggle
     renderLessons();
-    outHTML("<b style='color:var(--green)'>Welcome to Terminalapi</b>", "sys");
-    out("A friendly place to learn bash — then launch real servers via Termux.");
-    out("Type 'help', tap a chip below, or open the Learn tab to start a lesson.");
-    out("");
+
+    if (prevScreen && prevScreen.replace(/\s/g, "")) {
+      screen.innerHTML = prevScreen;
+      outHTML("<span style='opacity:.65'>—— previous session restored (offline) ——</span>", "sys");
+      screen.scrollTop = screen.scrollHeight;
+    } else {
+      outHTML("<b style='color:var(--mint)'>Welcome to Terminalapi</b>", "sys");
+      out("A friendly place to learn bash — then launch real servers via Termux.");
+      out("Your sandbox, history and lesson progress are saved on this device and");
+      out("work fully offline. Type 'help', tap a chip, or open Learn to start.");
+      out("");
+    }
 
     document.getElementById("runBtn").onclick = submit;
     document.getElementById("cmdInput").addEventListener("keydown", function (e) {
@@ -978,6 +1768,18 @@
       else if (e.key === "ArrowUp") { if (histIdx > 0) { histIdx--; this.value = history[histIdx] || ""; } e.preventDefault(); }
       else if (e.key === "ArrowDown") { if (histIdx < history.length - 1) { histIdx++; this.value = history[histIdx] || ""; } else { histIdx = history.length; this.value = ""; } e.preventDefault(); }
     });
+
+    // Persist the Explain-mode toggle so it stays how you left it.
+    var exToggle = document.getElementById("explainToggle");
+    if (exToggle) exToggle.addEventListener("change", function () {
+      try { localStorage.setItem(PERSIST.explain, this.checked ? "1" : "0"); } catch (e) {}
+    });
+
+    // Kortana chat input
+    var kSendBtn = document.getElementById("kSendBtn");
+    if (kSendBtn) kSendBtn.onclick = kSend;
+    var kInput = document.getElementById("kInput");
+    if (kInput) kInput.addEventListener("keydown", function (e) { if (e.key === "Enter") kSend(); });
 
     // nav
     var navBtns = document.querySelectorAll("nav button");

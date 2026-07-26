@@ -10,7 +10,16 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
 import android.widget.Toast;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
+import org.json.JSONObject;
 
 /**
  * Bridge exposed to the WebView as {@code window.Android}. Every method is
@@ -34,9 +43,99 @@ public class TerminalBridge {
     private final Context context;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private PowerManager.WakeLock wakeLock;
+    private WebView webView;
 
     TerminalBridge(Context context) {
         this.context = context.getApplicationContext();
+    }
+
+    /** Give the bridge a handle to the WebView so async HTTP results can be
+     *  delivered back into JS. Called once from MainActivity after setup. */
+    void attachWebView(WebView w) {
+        this.webView = w;
+    }
+
+    /* ---------- Async HTTP to Kortana's Terminus (never blocks the WebView) ----------
+     * JavascriptInterface calls are synchronous from JS's point of view, so a
+     * blocking network call here would freeze the whole UI for the length of an
+     * LLM reply. Instead these run on a worker thread and hand the result back
+     * to JS via window.__bridgeResolve(callbackId, envelopeJson). */
+    @JavascriptInterface
+    public void httpPostJson(final String url, final String body, final String callbackId) {
+        new Thread(() -> deliver(callbackId, doRequest("POST", url, body, 180000, null))).start();
+    }
+
+    @JavascriptInterface
+    public void httpGet(final String url, final String callbackId) {
+        new Thread(() -> deliver(callbackId, doRequest("GET", url, null, 8000, null))).start();
+    }
+
+    /* Keyed variants — attach x-api-key so calls to Kortana's Terminus
+     * authenticate when it's hosted with a TERMINUS_API_KEY (e.g. on Render). */
+    @JavascriptInterface
+    public void httpPostJsonKeyed(final String url, final String body, final String apiKey, final String callbackId) {
+        new Thread(() -> deliver(callbackId, doRequest("POST", url, body, 180000, apiKey))).start();
+    }
+
+    @JavascriptInterface
+    public void httpGetKeyed(final String url, final String apiKey, final String callbackId) {
+        new Thread(() -> deliver(callbackId, doRequest("GET", url, null, 8000, apiKey))).start();
+    }
+
+    private String doRequest(String method, String urlStr, String body, int readTimeoutMs, String apiKey) {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(urlStr);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod(method);
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(readTimeoutMs);
+            conn.setRequestProperty("Accept", "application/json");
+            if (apiKey != null && !apiKey.isEmpty()) conn.setRequestProperty("x-api-key", apiKey);
+            if (body != null && !"GET".equals(method)) {
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Content-Type", "application/json");
+                OutputStream os = conn.getOutputStream();
+                os.write(body.getBytes("UTF-8"));
+                os.close();
+            }
+            int status = conn.getResponseCode();
+            boolean ok = status >= 200 && status < 300;
+            InputStream is = (status >= 200 && status < 400)
+                    ? conn.getInputStream() : conn.getErrorStream();
+            String resp = readAll(is);
+            return new JSONObject()
+                    .put("ok", ok).put("status", status)
+                    .put("body", resp == null ? "" : resp)
+                    .toString();
+        } catch (Exception e) {
+            try {
+                return new JSONObject().put("ok", false)
+                        .put("error", String.valueOf(e.getMessage())).toString();
+            } catch (Exception ignore) {
+                return "{\"ok\":false,\"error\":\"request failed\"}";
+            }
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static String readAll(InputStream is) throws Exception {
+        if (is == null) return "";
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        byte[] chunk = new byte[4096];
+        int n;
+        while ((n = is.read(chunk)) != -1) buf.write(chunk, 0, n);
+        is.close();
+        return buf.toString("UTF-8");
+    }
+
+    private void deliver(final String callbackId, final String envelopeJson) {
+        final String js = "window.__bridgeResolve && window.__bridgeResolve("
+                + JSONObject.quote(callbackId) + "," + JSONObject.quote(envelopeJson) + ");";
+        mainHandler.post(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
     }
 
     /** True when the genuine Termux app (package com.termux) is installed. */
