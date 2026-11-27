@@ -1,8 +1,7 @@
 name: Build APK
 
 # Builds a sideloadable debug APK from the Android project in twa-app/ and
-# publishes it as a GitHub Release with a direct, no-login download link — so a
-# new build reaches your phone in one tap (no GitHub login, no unzipping).
+# publishes it as a GitHub Release with a direct, no-login download link.
 # The artifact upload is kept too, for logged-in developers.
 
 on:
@@ -19,11 +18,9 @@ jobs:
   build-apk:
     name: Build sideloadable debug APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30   # a genuine hang fails fast instead of burning the 6h ceiling
+    timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
-      # Belt-and-suspenders anti-hang: force these even if gradle.properties is
-      # ever reverted. TERM=dumb + CI=true stop any interactive/animated output.
       GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false"
       TERM: dumb
     steps:
@@ -41,14 +38,13 @@ jobs:
 
       - name: Install required SDK packages
         run: |
-          yes | sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" >/dev/null
+          # Accept licenses separately. Piping `yes` into sdkmanager fails
+          # under GitHub's pipefail (SIGPIPE), which killed this step.
           set +o pipefail
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           set -o pipefail
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" >/dev/null
-      # Make every build a unique, installable upgrade. Android refuses to
-      # "update" an install unless versionCode increases, so derive it from the
-      # run number. The base versionName is preserved and suffixed with the run.
+
       - name: Bump versionCode for this build
         working-directory: twa-app
         run: |
@@ -63,11 +59,6 @@ jobs:
       - name: Build debug APK
         working-directory: twa-app
         run: |
-          # The flags are the hang fix:
-          #   --no-daemon      never leave a background JVM holding the pipe open
-          #   --console=plain  no animated console to stall on a non-TTY
-          #   --no-watch-fs    no filesystem watcher to hang in the sandbox
-          # `timeout 20m` makes a stuck build fail promptly with a clear signal.
           timeout 20m ./gradlew assembleDebug \
             --no-daemon --console=plain --no-watch-fs --stacktrace
 
@@ -78,23 +69,8 @@ jobs:
           path: twa-app/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-      # Publish a Release only for pushes to the main line (not PRs / feature
-      # branches), so the "latest" download link always tracks shipped code.
-      - name: Publish APK as a GitHub Release (one-tap phone install)
+      - name: Publish APK as a GitHub Release
         if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         run: |
           TAG="apk-build-${GITHUB_RUN_NUMBER}"
           cp twa-app/app/build/outputs/apk/debug/app-debug.apk "terminalapi-${TAG}.apk"
-          gh release create "$TAG" \
-            --title "Terminalapi APK build #${GITHUB_RUN_NUMBER}" \
-            --notes "Sideloadable debug APK from ${GITHUB_SHA}.
-
-          Install on your phone: open this release on the phone, tap the .apk
-          below to download, then open it to install (enable 'install unknown
-          apps' for your browser/file manager first). Installs over any earlier
-          build — no need to uninstall.
-
-          The 'latest' link always points at the newest build:
-          https://github.com/${GITHUB_REPOSITORY}/releases/latest" \
-            "terminalapi-${TAG}.apk"
-          echo "Direct download: https://github.com/${GITHUB_REPOSITORY}/releases/latest"
