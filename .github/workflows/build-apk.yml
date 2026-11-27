@@ -42,7 +42,10 @@ jobs:
       - name: Install required SDK packages
         run: |
           yes | sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" >/dev/null
-
+          set +o pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          set -o pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" >/dev/null
       # Make every build a unique, installable upgrade. Android refuses to
       # "update" an install unless versionCode increases, so derive it from the
       # run number. The base versionName is preserved and suffixed with the run.
